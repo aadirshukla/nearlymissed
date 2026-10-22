@@ -1,0 +1,10 @@
+.nearmiss_cache/
+.streamlit/
+__pycache__/
+*.py[cod]
+*.pt
+.pytest_cache/
+.DS_Store
+.venv/
+venv/
+

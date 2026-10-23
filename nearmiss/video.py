@@ -278,14 +278,18 @@ def load_artifacts(artifacts: AnalysisArtifacts) -> tuple[list[dict], VideoMetad
     return tracks, VideoMetadata(**raw_metadata)
 
 
-def _render_key(zone: list[list[float]], trail_length: int) -> str:
+def _render_key(
+    zone: list[list[float]], trail_length: int, events: list[dict] | None = None
+) -> str:
     encoded = json.dumps(
         {
-            "renderer_version": 2,
+            "renderer_version": 6,
             "zone": zone,
             "trail_length": trail_length,
+            "events": events or [],
         },
         sort_keys=True,
+        default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:12]
 
@@ -296,10 +300,12 @@ def render_annotated_video(
     zone: list[list[float]],
     trail_length: int = 30,
     progress: Callable[[float, str], None] | None = None,
+    events: list[dict] | None = None,
 ) -> Path:
-    """Fast second pass that draws boxes, IDs, trajectories, and the zone."""
+    """Draw tracks, predicted conflict paths, evidence labels, and the zone."""
 
-    render_key = _render_key(zone, trail_length)
+    events = events or []
+    render_key = _render_key(zone, trail_length, events)
     output_path = artifacts.cache_dir / f"annotated_{render_key}.mp4"
     if output_path.exists() and output_path.stat().st_size > 0:
         if progress:
@@ -327,6 +333,11 @@ def render_annotated_video(
     )
     frame_index = 0
     zone_array = np.asarray(zone, dtype=np.int32) if len(zone) >= 3 else None
+    severity_colors = {
+        "HIGH": (94, 63, 244),
+        "MEDIUM": (60, 146, 251),
+        "LOW": (21, 204, 250),
+    }
     try:
         while True:
             ok, frame = capture.read()
@@ -334,19 +345,132 @@ def render_annotated_video(
                 break
             if zone_array is not None:
                 overlay = frame.copy()
-                cv2.fillPoly(overlay, [zone_array], (56, 189, 248))
+                cv2.fillPoly(overlay, [zone_array], (248, 189, 56))
                 cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
-                cv2.polylines(frame, [zone_array], True, (56, 189, 248), 2)
+                cv2.polylines(frame, [zone_array], True, (248, 189, 56), 2)
+
+            active_events: list[dict] = []
+            for event in events:
+                event_frame = int(event.get("frame_index", 0))
+                start_frame = int(event.get("start_frame_index", event_frame))
+                end_frame = int(event.get("end_frame_index", event_frame))
+                padding = max(1, int(round(0.35 * artifacts.metadata.fps)))
+                if start_frame - padding <= frame_index <= end_frame + padding:
+                    active_events.append(event)
+
+            active_events.sort(
+                key=lambda item: (
+                    {"HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(
+                        str(item.get("severity", "LOW")).upper(), 0
+                    ),
+                    float(item.get("risk_score", 0.0)),
+                ),
+                reverse=True,
+            )
+            highlighted_ids: dict[int, dict] = {}
+            for event_number, event in enumerate(active_events):
+                severity = str(event.get("severity", "LOW")).upper()
+                color = severity_colors.get(severity, severity_colors["LOW"])
+                first_start = event.get("participant_a_position") or event.get("vehicle_position")
+                first_end = event.get("participant_a_predicted_end") or event.get("vehicle_predicted_end")
+                second_start = event.get("participant_b_position") or event.get("pedestrian_position")
+                second_end = event.get("participant_b_predicted_end") or event.get("pedestrian_predicted_end")
+                conflict_point = event.get("conflict_point")
+                if first_start and first_end:
+                    cv2.arrowedLine(
+                        frame,
+                        tuple(int(value) for value in first_start),
+                        tuple(int(value) for value in first_end),
+                        color,
+                        3,
+                        cv2.LINE_AA,
+                        tipLength=0.08,
+                    )
+                if second_start and second_end:
+                    cv2.arrowedLine(
+                        frame,
+                        tuple(int(value) for value in second_start),
+                        tuple(int(value) for value in second_end),
+                        color,
+                        3,
+                        cv2.LINE_AA,
+                        tipLength=0.08,
+                    )
+                if conflict_point:
+                    point = tuple(int(value) for value in conflict_point)
+                    cv2.drawMarker(
+                        frame,
+                        point,
+                        color,
+                        markerType=cv2.MARKER_TILTED_CROSS,
+                        markerSize=24,
+                        thickness=4,
+                    )
+                first_ids = event.get("participant_a_track_ids") or event.get("vehicle_track_ids") or [
+                    event.get("participant_a_track_id", event.get("vehicle_track_id"))
+                ]
+                second_ids = event.get("participant_b_track_ids") or event.get("pedestrian_track_ids") or [
+                    event.get("participant_b_track_id", event.get("pedestrian_track_id"))
+                ]
+                for track_id in first_ids + second_ids:
+                    if track_id is not None:
+                        highlighted_ids.setdefault(int(track_id), event)
+
+                if event_number < 4:
+                    banner_y = 30 + 30 * event_number
+                    first_type = str(event.get("participant_a_type", "vehicle"))[:1].upper()
+                    second_type = str(event.get("participant_b_type", "pedestrian"))[:1].upper()
+                    first_id = event.get("participant_a_track_id", event.get("vehicle_track_id", "?"))
+                    second_id = event.get("participant_b_track_id", event.get("pedestrian_track_id", "?"))
+                    banner = (
+                        f'{severity}  t={float(event.get("timestamp_seconds", 0.0)):.1f}s  '
+                        f'{first_type}#{first_id}  '
+                        f'{second_type}#{second_id}  '
+                        f'gap={float(event.get("arrival_time_gap_seconds", 0.0)):.2f}s  '
+                        f'sep={float(event.get("path_separation_pixels", 0.0)):.0f}px'
+                    )
+                    cv2.putText(
+                        frame,
+                        banner,
+                        (16, banner_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65,
+                        color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+            if len(active_events) > 4:
+                cv2.putText(
+                    frame,
+                    f"+{len(active_events) - 4} additional concurrent flags",
+                    (16, 150),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
 
             for record in by_frame.get(frame_index, []):
                 track_id = int(record["track_id"])
                 x1, y1, x2, y2 = (int(value) for value in record["bbox"])
-                center = tuple(int(value) for value in record["center"])
+                center = (int((x1 + x2) / 2), y2)
                 is_person = record["object_type"] == "pedestrian"
-                color = (94, 234, 212) if is_person else (251, 146, 60)
+                color = (191, 212, 45) if is_person else (60, 146, 251)
+                highlighted_event = highlighted_ids.get(track_id)
+                thickness = 2
+                if highlighted_event:
+                    severity = str(highlighted_event.get("severity", "LOW")).upper()
+                    color = severity_colors.get(severity, severity_colors["LOW"])
+                    thickness = 4
                 trails[track_id].append(center)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                label = f'{record["class_name"]}  #{track_id}'
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                suffix = (
+                    f'  {str(highlighted_event.get("severity")).upper()}'
+                    if highlighted_event
+                    else ""
+                )
+                label = f'{record["class_name"]}  #{track_id}{suffix}'
                 cv2.rectangle(frame, (x1, max(0, y1 - 24)), (x1 + 10 + 9 * len(label), y1), color, -1)
                 cv2.putText(
                     frame,

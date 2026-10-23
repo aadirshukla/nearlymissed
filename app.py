@@ -11,9 +11,9 @@ import plotly.express as px
 import streamlit as st
 from PIL import Image, ImageDraw
 
-from conflict_detector import detect_conflicts
+from conflict_detector import detect_conflicts, diagnose_conflicts
 from nearmiss.config import DEFAULT_CONFLICT_CONFIG, TrackingConfig
-from nearmiss.events import format_timestamp, normalize_events
+from nearmiss.events import events_to_csv, format_timestamp, normalize_events
 from nearmiss.geometry import enrich_tracks_with_zone, normalized_polygon
 from nearmiss.video import (
     VideoError,
@@ -158,17 +158,58 @@ def json_default(value):
     return str(value)
 
 
+def conflict_timeline_figure(events: list[dict]):
+    """Build the shared event timeline without creating placeholder points."""
+
+    timeline_rows = [event for event in events if event.get("timestamp_seconds") is not None]
+    if not timeline_rows:
+        return None
+    timeline_df = pd.DataFrame(timeline_rows)
+    timeline_df["timeline"] = "Potential conflict flag"
+    figure = px.scatter(
+        timeline_df,
+        x="timestamp_seconds",
+        y="timeline",
+        color="severity",
+        hover_data=[
+            column
+            for column in [
+                "event_id",
+                "participant_a_track_id",
+                "participant_b_track_id",
+                "interaction_type",
+                "first_alert_timestamp_seconds",
+                "arrival_time_gap_seconds",
+                "risk_score",
+                "description",
+            ]
+            if column in timeline_df
+        ],
+        labels={"timestamp_seconds": "Seconds into video", "timeline": ""},
+        color_discrete_map={"LOW": "#facc15", "MEDIUM": "#fb923c", "HIGH": "#f43f5e"},
+    )
+    figure.update_traces(marker={"size": 14, "line": {"width": 1, "color": "white"}})
+    figure.update_layout(
+        height=280,
+        margin={"l": 8, "r": 8, "t": 24, "b": 8},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="Provisional risk",
+    )
+    return figure
+
+
 st.markdown('<div class="nm-eyebrow">Computer vision for safer streets</div>', unsafe_allow_html=True)
 st.markdown('<h1 class="nm-title">Near<span>Miss</span></h1>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="nm-subtitle">Upload an intersection video, track vehicles and pedestrians, '
-    "and inspect potential conflict flags with frame-level evidence.</p>",
+    '<p class="nm-subtitle">Upload an intersection video, track road users, '
+    "and inspect provisional vehicle collision-risk flags with frame-level evidence.</p>",
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="nm-notice"><b>Decision-support prototype.</b> Flags produced by a future '
-    "heuristic are potential conflicts—not verified crashes, accidents, or near misses. "
-    "Review source video before drawing conclusions.</div>",
+    '<div class="nm-notice"><b>Decision-support prototype.</b> Risk labels are provisional '
+    "image-coordinate heuristics—not verified crashes, near misses, physical speeds, or "
+    "collision probabilities. Review source video before drawing conclusions.</div>",
     unsafe_allow_html=True,
 )
 
@@ -186,16 +227,89 @@ with st.sidebar:
     st.caption("The first use downloads public pretrained weights. Later runs are local.")
 
     with st.expander("Detector configuration", expanded=False):
-        ttc_threshold = st.number_input(
-            "TTC threshold (seconds)", 0.1, 20.0, DEFAULT_CONFLICT_CONFIG["ttc_threshold_seconds"], 0.1
+        analysis_label = st.selectbox(
+            "Interaction analysis",
+            ["Vehicle to vehicle (default)", "Vehicle to pedestrian", "Both"],
+            help="Pedestrians remain available, but vehicle-to-vehicle screening is the default.",
         )
-        max_distance = st.number_input(
-            "Maximum distance (pixels)", 1.0, 2000.0, DEFAULT_CONFLICT_CONFIG["max_distance_pixels"], 5.0
+        prediction_horizon = st.number_input(
+            "Prediction horizon (seconds)",
+            min_value=0.5,
+            max_value=5.0,
+            value=DEFAULT_CONFLICT_CONFIG["prediction_horizon_seconds"],
+            step=0.1,
+        )
+        high_time_gap = st.number_input(
+            "HIGH: maximum arrival gap (seconds)",
+            min_value=0.05,
+            max_value=3.0,
+            value=DEFAULT_CONFLICT_CONFIG["high_time_gap_seconds"],
+            step=0.05,
+        )
+        medium_time_gap = st.number_input(
+            "MEDIUM: maximum arrival gap (seconds)",
+            min_value=0.05,
+            max_value=4.0,
+            value=DEFAULT_CONFLICT_CONFIG["medium_time_gap_seconds"],
+            step=0.05,
+        )
+        low_time_gap = st.number_input(
+            "LOW: maximum arrival gap (seconds)",
+            min_value=0.05,
+            max_value=5.0,
+            value=DEFAULT_CONFLICT_CONFIG["low_time_gap_seconds"],
+            step=0.05,
+        )
+        path_tolerance = st.number_input(
+            "Projected path tolerance (pixels)",
+            min_value=1.0,
+            max_value=250.0,
+            value=DEFAULT_CONFLICT_CONFIG["path_intersection_tolerance_pixels"],
+            step=1.0,
+            help="Compensates for box jitter and object width in image coordinates.",
+        )
+        min_closing_speed = st.number_input(
+            "Minimum closing motion (pixels/second)",
+            min_value=0.0,
+            max_value=200.0,
+            value=DEFAULT_CONFLICT_CONFIG["min_closing_speed_pixels_per_second"],
+            step=1.0,
+        )
+        smoothing_frames = st.number_input(
+            "Velocity smoothing observations",
+            min_value=2,
+            max_value=30,
+            value=DEFAULT_CONFLICT_CONFIG["velocity_smoothing_frames"],
+            step=1,
         )
         min_track_age = st.number_input(
-            "Minimum track age (frames)", 1, 300, DEFAULT_CONFLICT_CONFIG["min_track_age_frames"], 1
+            "Minimum track age (observations)",
+            min_value=2,
+            max_value=120,
+            value=DEFAULT_CONFLICT_CONFIG["min_track_age_frames"],
+            step=1,
         )
-        st.caption("These values are passed through unchanged to your detector.")
+        duplicate_cooldown = st.number_input(
+            "Duplicate suppression window (seconds)",
+            min_value=0.25,
+            max_value=10.0,
+            value=DEFAULT_CONFLICT_CONFIG["duplicate_cooldown_seconds"],
+            step=0.25,
+        )
+        debug_mode = st.checkbox(
+            "Debug rejected vehicle pairs",
+            value=False,
+            help="Shows real detector gate measurements and rejection reasons. Disable for normal review.",
+        )
+        st.caption(
+            "All motion is measured in pixels. Thresholds are screening heuristics, "
+            "not calibrated physical safety limits."
+        )
+        if not float(high_time_gap) <= float(medium_time_gap) <= float(low_time_gap):
+            st.warning(
+                "Arrival-gap thresholds must increase from HIGH to MEDIUM to LOW. "
+                "The detector will expand later thresholds to preserve that order."
+            )
 
 tracking_config = TrackingConfig(
     model_name=model_name,
@@ -205,9 +319,23 @@ tracking_config = TrackingConfig(
     trail_length=trail_length,
 )
 conflict_config = {
-    "ttc_threshold_seconds": float(ttc_threshold),
-    "max_distance_pixels": float(max_distance),
+    **DEFAULT_CONFLICT_CONFIG,
+    "prediction_horizon_seconds": float(prediction_horizon),
+    "high_time_gap_seconds": float(high_time_gap),
+    "medium_time_gap_seconds": max(float(high_time_gap), float(medium_time_gap)),
+    "low_time_gap_seconds": max(
+        float(high_time_gap), float(medium_time_gap), float(low_time_gap)
+    ),
+    "path_intersection_tolerance_pixels": float(path_tolerance),
+    "min_closing_speed_pixels_per_second": float(min_closing_speed),
+    "velocity_smoothing_frames": int(smoothing_frames),
     "min_track_age_frames": int(min_track_age),
+    "duplicate_cooldown_seconds": float(duplicate_cooldown),
+    "analysis_mode": {
+        "Vehicle to vehicle (default)": "vehicle_vehicle",
+        "Vehicle to pedestrian": "vehicle_pedestrian",
+        "Both": "both",
+    }[analysis_label],
 }
 
 section_title(1, "Upload an intersection video")
@@ -240,7 +368,7 @@ section_title(2, "Mark the conflict zone")
 st.write("Click the boundary corners in order. The final edge closes automatically.")
 draft_zone, applied_zone = zone_picker(video_hash, first_frame)
 if applied_zone:
-    st.success(f"Conflict zone active · {len(applied_zone)} vertices", icon="✓")
+    st.success(f"Conflict zone active · {len(applied_zone)} vertices", icon="✅")
     if draft_zone != applied_zone:
         st.warning("The draft has unapplied changes; the active zone is still shown in exports and video.")
 elif len(draft_zone) >= 3:
@@ -280,14 +408,32 @@ except (OSError, ValueError, TypeError) as exc:
     st.error(f"Cached analysis could not be loaded: {exc}")
     st.stop()
 
-tracks_for_detector = enrich_tracks_with_zone(tracks, applied_zone)
+has_user_zone = len(applied_zone) >= 3
+analysis_zone = (
+    applied_zone
+    if has_user_zone
+    else [
+        [0.0, 0.0],
+        [float(metadata.width), 0.0],
+        [float(metadata.width), float(metadata.height)],
+        [0.0, float(metadata.height)],
+    ]
+)
+tracks_for_detector = enrich_tracks_with_zone(tracks, analysis_zone)
+conflict_config["zone_is_user_defined"] = has_user_zone
 raw_events = []
 detector_error = None
-if len(applied_zone) >= 3:
+try:
+    raw_events = detect_conflicts(tracks_for_detector, analysis_zone, conflict_config)
+except Exception as exc:  # user-owned extension point should not crash the dashboard
+    detector_error = str(exc)
+
+diagnostic_rows: list[dict] = []
+if debug_mode:
     try:
-        raw_events = detect_conflicts(tracks_for_detector, applied_zone, conflict_config)
-    except Exception as exc:  # user-owned extension point should not crash the dashboard
-        detector_error = str(exc)
+        diagnostic_rows = diagnose_conflicts(tracks_for_detector, analysis_zone, conflict_config)
+    except Exception as exc:
+        st.warning(f"Pair diagnostics failed: {exc}")
 
 events, event_warnings = normalize_events(raw_events, metadata.fps)
 if detector_error:
@@ -303,6 +449,7 @@ try:
         applied_zone,
         trail_length=tracking_config.trail_length,
         progress=progress_callback(annotation_progress),
+        events=events,
     )
 except VideoError as exc:
     annotation_progress.empty()
@@ -323,8 +470,23 @@ section_title(4, "Review the analysis")
 summary_cols = st.columns(4)
 summary_cols[0].metric("Vehicles tracked", len(unique_vehicles))
 summary_cols[1].metric("Pedestrians tracked", len(unique_pedestrians))
-summary_cols[2].metric("Tracks entering zone", len(in_zone_ids) if applied_zone else "—")
-summary_cols[3].metric("Potential flags", len(events))
+summary_cols[2].metric("Tracks in analysis area", len(in_zone_ids))
+summary_cols[3].metric("Vehicle conflict flags", len(events))
+
+risk_counts = {
+    severity: sum(str(event.get("severity", "")).upper() == severity for event in events)
+    for severity in ("LOW", "MEDIUM", "HIGH")
+}
+risk_cols = st.columns(3)
+risk_cols[0].metric("LOW provisional", risk_counts["LOW"])
+risk_cols[1].metric("MEDIUM provisional", risk_counts["MEDIUM"])
+risk_cols[2].metric("HIGH provisional", risk_counts["HIGH"])
+
+if not has_user_zone:
+    st.warning(
+        "Whole-frame analysis is active because no conflict zone was selected. "
+        "This is less reliable; draw the intersection or road area to reduce unrelated flags."
+    )
 
 if not tracks:
     st.warning(
@@ -332,66 +494,60 @@ if not tracks:
         "Try a lower threshold or a clearer clip."
     )
 
-video_tab, events_tab, data_tab = st.tabs(["Annotated video", "Conflict timeline", "Track data"])
+video_tab, events_tab, data_tab = st.tabs(["Annotated video", "Event details", "Track data"])
 
 with video_tab:
     st.video(str(annotated_path))
-    st.caption("Orange: vehicles · teal: pedestrians · blue: active conflict zone")
+    st.caption(
+        "Orange: vehicles · teal: pedestrians · blue: active zone · "
+        "yellow/orange/red: provisional LOW/MEDIUM/HIGH conflict evidence"
+    )
+    timeline_figure = conflict_timeline_figure(events)
+    if timeline_figure is not None:
+        st.markdown("#### Conflict timeline")
+        st.plotly_chart(timeline_figure, use_container_width=True)
+        st.caption("Markers show the strongest image-coordinate heuristic frame for each event.")
 
 with events_tab:
-    if not applied_zone:
-        st.info("Apply a conflict zone to call `detect_conflicts(...)`.")
-    elif detector_error:
+    if detector_error:
         st.error("No timeline is available until the detector error is fixed.")
     elif not events:
         st.info(
-            "No potential conflict events were returned. The detector stub is intentionally empty "
-            "until you implement it in `conflict_detector.py`."
+            "No qualifying projected vehicle interactions were found with the "
+            "current zone and detector thresholds."
         )
     else:
-        timeline_rows = [event for event in events if event.get("timestamp_seconds") is not None]
-        if timeline_rows:
-            timeline_df = pd.DataFrame(timeline_rows)
-            timeline_df["timeline"] = "Potential conflict flag"
-            figure = px.scatter(
-                timeline_df,
-                x="timestamp_seconds",
-                y="timeline",
-                color="severity",
-                hover_data=[column for column in ["event_id", "description"] if column in timeline_df],
-                labels={"timestamp_seconds": "Seconds into video", "timeline": ""},
-                color_discrete_sequence=["#fb923c", "#f43f5e", "#38bdf8"],
-            )
-            figure.update_traces(marker={"size": 14, "line": {"width": 1, "color": "white"}})
-            figure.update_layout(
-                height=280,
-                margin={"l": 8, "r": 8, "t": 24, "b": 8},
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                legend_title_text="Heuristic severity",
-            )
-            st.plotly_chart(figure, use_container_width=True)
-
         display_events = []
         for event in events:
             row = dict(event)
             row["video_time"] = format_timestamp(event.get("timestamp_seconds"))
+            row["first_alert_time"] = format_timestamp(event.get("first_alert_timestamp_seconds"))
             display_events.append(row)
         preferred = [
             column
             for column in [
                 "event_id",
+                "first_alert_time",
                 "video_time",
                 "severity",
-                "vehicle_track_id",
-                "pedestrian_track_id",
+                "participant_a_track_id",
+                "participant_a_type",
+                "participant_b_track_id",
+                "participant_b_type",
+                "risk_score",
+                "arrival_time_gap_seconds",
+                "path_separation_pixels",
+                "closing_speed_pixels_per_second",
                 "description",
             ]
             if any(column in item for item in display_events)
         ]
         remaining = [column for column in pd.DataFrame(display_events).columns if column not in preferred]
         st.dataframe(pd.DataFrame(display_events)[preferred + remaining], use_container_width=True)
-        st.warning("Every row is a heuristic flag and requires human review; it is not a verified incident.")
+        st.warning(
+            "Every row is a provisional pixel-space heuristic flag requiring human review. "
+            "The risk index ranks evidence; it is not an accident probability."
+        )
 
 with data_tab:
     counts = (
@@ -425,6 +581,38 @@ with data_tab:
         table["center"] = table["center"].apply(json.dumps)
         st.dataframe(table, use_container_width=True, height=380)
 
+if debug_mode:
+    with st.expander("Debug: vehicle-pair rejection trace", expanded=True):
+        st.caption(
+            "One row is emitted for each active vehicle pair at each tracker update. "
+            "This is diagnostic evidence only; it does not create alerts."
+        )
+        if not diagnostic_rows:
+            st.warning("No simultaneous vehicle pairs reached the detector's timestamp loop.")
+        else:
+            debug_table = pd.DataFrame(diagnostic_rows)
+            debug_table["video_time"] = debug_table["timestamp_seconds"].map(format_timestamp)
+            preferred_debug_columns = [
+                "video_time",
+                "frame_index",
+                "participant_a_track_id",
+                "participant_a_class",
+                "participant_a_observations",
+                "participant_a_velocity_pixels_per_second",
+                "participant_b_track_id",
+                "participant_b_class",
+                "participant_b_observations",
+                "participant_b_velocity_pixels_per_second",
+                "projected_paths_overlap",
+                "participant_a_eta_seconds",
+                "participant_b_eta_seconds",
+                "arrival_time_gap_seconds",
+                "inside_conflict_zone",
+                "rejection_reason",
+            ]
+            visible_columns = [column for column in preferred_debug_columns if column in debug_table]
+            st.dataframe(debug_table[visible_columns], use_container_width=True, height=360)
+
 st.markdown("### Export results")
 export_payload = {
     "schema_version": "1.0",
@@ -434,12 +622,13 @@ export_payload = {
     "tracking_config": tracking_config.as_dict(),
     "conflict_config": conflict_config,
     "zone_pixels": applied_zone,
+    "analysis_zone_pixels": analysis_zone,
     "zone_normalized": normalized_polygon(applied_zone, metadata.width, metadata.height),
     "tracks": tracks_for_detector,
     "events": events,
     "disclaimer": "Potential conflict flags are heuristic and are not verified accidents or near misses.",
 }
-download_cols = st.columns(3)
+download_cols = st.columns(4)
 download_cols[0].download_button(
     "Download tracks CSV",
     data=tracks_to_csv(tracks_for_detector),
@@ -448,13 +637,20 @@ download_cols[0].download_button(
     use_container_width=True,
 )
 download_cols[1].download_button(
+    "Download events CSV",
+    data=events_to_csv(events),
+    file_name="nearmiss_events.csv",
+    mime="text/csv",
+    use_container_width=True,
+)
+download_cols[2].download_button(
     "Download analysis JSON",
     data=json.dumps(export_payload, indent=2, default=json_default),
     file_name="nearmiss_analysis.json",
     mime="application/json",
     use_container_width=True,
 )
-download_cols[2].download_button(
+download_cols[3].download_button(
     "Download annotated MP4",
     data=annotated_path.read_bytes(),
     file_name="nearmiss_annotated.mp4",

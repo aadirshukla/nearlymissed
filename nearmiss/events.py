@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import json
 from dataclasses import asdict, is_dataclass
+from io import StringIO
 from typing import Any
 
 
@@ -57,4 +60,51 @@ def format_timestamp(seconds: float | None) -> str:
         return "—"
     minutes, remaining = divmod(max(0.0, float(seconds)), 60)
     return f"{int(minutes):02d}:{remaining:04.1f}"
+
+
+def events_to_csv(events: list[dict]) -> bytes:
+    """Serialize conflict events, preserving nested evidence as JSON cells."""
+
+    if not events:
+        return b"event_id,timestamp_seconds,severity\n"
+    preferred = [
+        "event_id",
+        "timestamp_seconds",
+        "first_alert_timestamp_seconds",
+        "severity",
+        "risk_score",
+        "interaction_type",
+        "participant_a_track_id",
+        "participant_b_track_id",
+        "participant_a_type",
+        "participant_b_type",
+        "vehicle_a_track_id",
+        "vehicle_b_track_id",
+        "vehicle_track_id",
+        "pedestrian_track_id",
+        "arrival_time_gap_seconds",
+        "participant_a_eta_seconds",
+        "participant_b_eta_seconds",
+        "vehicle_eta_seconds",
+        "pedestrian_eta_seconds",
+        "path_separation_pixels",
+        "closing_speed_pixels_per_second",
+        "conflict_point",
+        "description",
+    ]
+    all_fields = {key for event in events for key in event}
+    fieldnames = [name for name in preferred if name in all_fields]
+    fieldnames.extend(sorted(all_fields - set(fieldnames)))
+    stream = StringIO()
+    writer = csv.DictWriter(stream, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for event in events:
+        row = {
+            key: json.dumps(value, sort_keys=True)
+            if isinstance(value, (dict, list, tuple))
+            else value
+            for key, value in event.items()
+        }
+        writer.writerow(row)
+    return stream.getvalue().encode("utf-8")
 

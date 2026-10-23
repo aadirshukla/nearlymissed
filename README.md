@@ -1,6 +1,6 @@
 # NearMiss
 
-NearMiss is a local, CPU-friendly computer-vision prototype for reviewing vehicle–pedestrian interactions in intersection video. It detects road users with a pretrained YOLO nano model, maintains identities with ByteTrack, visualizes trajectories and a user-defined conflict zone, and passes structured observations to a project-owned conflict detector.
+NearMiss is a local, CPU-friendly computer-vision prototype for reviewing potential vehicle–vehicle conflicts in intersection video. It detects road users with a pretrained YOLO nano model, maintains identities with ByteTrack, visualizes trajectories and a user-defined conflict zone, and passes structured observations to a project-owned conflict detector. Vehicle–pedestrian analysis remains an optional sidebar mode.
 
 > NearMiss produces decision-support evidence. Any events returned by the detector are **heuristic potential-conflict flags**, not verified accidents or near misses.
 
@@ -8,12 +8,14 @@ NearMiss is a local, CPU-friendly computer-vision prototype for reviewing vehicl
 
 - MP4 upload and validation
 - YOLO detection for people, bicycles, cars, motorcycles, buses, and trucks
+- Vehicle-risk pairing for cars, motorcycles, buses, and trucks (bicycles remain tracked but are not included in this mode)
 - Persistent ByteTrack IDs, boxes, labels, confidence values, and movement trails
 - Click-to-draw polygonal conflict zone
 - Content-addressed on-disk cache for tracking results and annotated videos
 - Annotated playback, unique road-user counts, event timeline, data table, and class chart
-- Track CSV, full JSON, and annotated MP4 downloads
-- Clean extension point for a custom conflict algorithm—no fake events are generated
+- Smoothed image-coordinate trajectory prediction and geometric path comparison
+- Provisional LOW / MEDIUM / HIGH flags with inspectable measurements and duplicate suppression
+- Track CSV, event CSV, full JSON, and annotated H.264 MP4 downloads
 
 ## Install and run
 
@@ -29,17 +31,17 @@ streamlit run app.py
 
 Open the local URL printed by Streamlit, normally `http://localhost:8501`.
 
-The first analysis downloads the selected public YOLO nano weight file (roughly a few megabytes). After that, processing is local and requires no API key or paid service. If `ffmpeg` is installed, NearMiss uses it to make the annotated MP4 broadly browser-compatible; otherwise it keeps OpenCV's MP4 output.
+The first analysis downloads the selected public YOLO nano weight file (roughly a few megabytes). After that, processing is local and requires no API key or paid service. A bundled FFmpeg binary converts annotated output to browser-compatible H.264; an existing system FFmpeg installation is used when available.
 
 For a fast CPU demo, start with a stationary-camera clip under 30 seconds at 720p. Runtime depends on CPU, frame size, and clip length.
 
 ## Use the app
 
 1. Upload an MP4.
-2. Click at least three boundary points in order on the first frame, then select **Use this conflict zone**.
+2. Optionally click at least three boundary points in order on the first frame, then select **Use this conflict zone**. Without one, NearMiss analyzes the whole frame and labels the result less reliable.
 3. Select **Analyze video**. Subsequent runs with the same file and settings use cached tracks.
-4. Review the annotated video and data. Until the custom detector is implemented, the conflict timeline correctly remains empty.
-5. Export tracks, the complete analysis bundle, or the annotated MP4.
+4. Review highlighted pairs, predicted paths, conflict points, the timeline, and supporting measurements.
+5. Export tracks, detected-event evidence, the complete analysis bundle, or the annotated MP4.
 
 Generated videos and tracking records live in `.nearmiss_cache/`, which is ignored by Git. Delete that directory manually if you want to clear local analysis data.
 
@@ -47,7 +49,7 @@ Generated videos and tracking records live in `.nearmiss_cache/`, which is ignor
 
 ```text
 app.py                     Streamlit workflow and dashboard
-conflict_detector.py       Your algorithm goes here (currently an empty stub)
+conflict_detector.py       Trajectory prediction, path comparison, risk rules, deduplication
 nearmiss/config.py         Model classes and configuration
 nearmiss/video.py          Validation, YOLO + ByteTrack, annotation, cache, CSV
 nearmiss/geometry.py       Point-in-polygon and zone enrichment
@@ -55,9 +57,9 @@ nearmiss/events.py         Detector-output validation for display/export
 tests/                     Contract and utility tests
 ```
 
-## Implement the conflict detector
+## Conflict detector
 
-Edit only `detect_conflicts()` in [`conflict_detector.py`](conflict_detector.py). The application calls it after tracking and after a valid zone has been applied:
+The application calls [`detect_conflicts()`](conflict_detector.py) after tracking. A selected polygon is preferred; otherwise it passes a full-frame polygon:
 
 ```python
 events = detect_conflicts(tracks, zone, config)
@@ -82,7 +84,7 @@ events = detect_conflicts(tracks, zone, config)
 }
 ```
 
-The list is ordered by frame. Missing detections simply produce no observation for that track/frame; do not assume every ID appears in every frame.
+The list is ordered by frame. The detector derives the bottom-center ground-contact approximation `((x1 + x2) / 2, y2)` from each bbox. Missing detections simply produce no observation for that track/frame.
 
 ### `zone`
 
@@ -94,39 +96,59 @@ The list is ordered by frame. Missing detections simply produce no observation f
 
 The last point is implicitly connected to the first. The detector is called only when there are at least three vertices.
 
-### `config`
+### Mathematical logic
 
-The sidebar currently passes this dictionary through unchanged:
+For every active vehicle pair at time `t` (or vehicle–pedestrian pair in the optional mode):
 
-```python
-{
-    "ttc_threshold_seconds": 3.0,
-    "max_distance_pixels": 120.0,
-    "min_track_age_frames": 5,
-}
-```
+1. Fit separate least-squares lines to recent `x(t)` and `y(t)` observations. Their slopes give a smoothed pixel velocity vector `v = (vx, vy)`.
+2. Project a finite path segment over horizon `H`: `p_future = p_now + vH`.
+3. Find the closest points on the two finite projected segments. Exact line intersection has zero separation; near overlap is accepted only within the configured pixel tolerance.
+4. Convert each closest-point segment fraction to an estimated arrival time: `ETA = fraction × H`. Stationary objects receive ETA zero at their current point, with division by zero avoided.
+5. Require positive closing motion. With relative position `r = p_ped - p_vehicle` and relative velocity `vr = v_ped - v_vehicle`, closing speed is `-dot(r, vr) / ||r||` pixels/second.
+6. Require the estimated conflict point to fall inside the selected polygon (or the clearly labelled whole-frame fallback) and the arrival gap `|ETA_A - ETA_B|` to meet a configured risk threshold.
+7. Merge consecutive qualifying frames for the same logical pair into one event. Very short, spatially consistent ByteTrack ID fragments can be stitched before this step.
 
-You may evolve these thresholds, but keep defaults synchronized with `DEFAULT_CONFLICT_CONFIG` in `nearmiss/config.py` and the corresponding controls in `app.py`.
+The displayed 0–100 risk score is a **heuristic ranking index**, not a probability. It combines projected-path proximity (35 points), arrival-time agreement (35), closing motion (20), and membership in the analysis area (10). LOW / MEDIUM / HIGH categories are determined by the independently adjustable arrival-gap thresholds.
 
-### Return value
+### Adjustable thresholds
 
-Return a list of dictionaries. Unknown fields are preserved in JSON and the event table. For the best dashboard experience, return:
+The sidebar exposes the values most useful during a demo:
+
+- prediction horizon (default 2.0 seconds),
+- HIGH / MEDIUM / LOW maximum arrival gaps (0.50 / 1.00 / 1.75 seconds),
+- projected path tolerance (35 pixels),
+- minimum closing motion (2 pixels/second),
+- velocity smoothing observations (5),
+- minimum track age (3 observations), and
+- duplicate suppression window (2 seconds).
+
+Additional conservative ID-stitching and observation-age defaults live in `DEFAULT_CONFLICT_CONFIG` in `nearmiss/config.py`.
+
+### Event evidence
+
+Each returned event includes the real track IDs, timestamp, category, predicted point and path endpoints, both pixel velocity vectors, both ETAs, arrival gap, projected path separation, closing motion, episode bounds, and the non-probabilistic heuristic index:
 
 ```python
 [
     {
-        "event_id": "evt-001",
+        "event_id": "conflict-001",
         "timestamp_seconds": 8.4,
-        "severity": "high",  # your heuristic label, not a verified outcome
-        "vehicle_track_id": 7,
-        "pedestrian_track_id": 12,
-        "description": "Short, evidence-based explanation",
-        "metrics": {"ttc_seconds": 1.2, "min_distance_pixels": 34.5},
+        "severity": "HIGH",
+        "risk_score": 87.5,
+        "vehicle_a_track_id": 7,
+        "vehicle_b_track_id": 12,
+        "conflict_point": [521.4, 408.2],
+        "participant_a_eta_seconds": 0.72,
+        "participant_b_eta_seconds": 0.91,
+        "arrival_time_gap_seconds": 0.19,
+        "path_separation_pixels": 3.4,
+        "closing_speed_pixels_per_second": 42.1,
+        "description": "Evidence-based provisional explanation",
     }
 ]
 ```
 
-`timestamp_seconds` can be replaced by `start_time_seconds`, or by `frame_index` (the app converts it using the video FPS). Return `[]` when no event satisfies your rule. Do not create placeholder events.
+The dashboard and exports contain only events derived from processed observations. No placeholder events or arbitrary accident probabilities are generated.
 
 ## Test the detector
 
@@ -136,21 +158,14 @@ Run the included suite:
 pytest -q
 ```
 
-Add focused synthetic tests to `tests/test_conflict_detector.py`. Build short track lists by hand so expected event timing and involved IDs are deterministic; test at least:
-
-- a vehicle and pedestrian far apart (must return no event),
-- paths that cross inside the zone within the configured threshold,
-- the same crossing outside the zone,
-- a track with missing frames,
-- a track shorter than `min_track_age_frames`, and
-- malformed or empty inputs if your algorithm chooses to support them.
-
-Then run one short real clip in the app and compare every returned event against the annotated frames. Unit tests establish math and edge cases; the video review checks whether detections and identity associations support the conclusion.
+`tests/test_conflict_detector.py` clearly labels its trajectories as synthetic and covers same-time crossing, different-time crossing, movement away, parallel paths, a stationary vehicle, missing frames, a brief ID switch, multiple vehicles, and duplicate-event prevention. Unit tests establish deterministic math; real-video review is still required to judge whether detector boxes and track identities support each flag.
 
 ## Notes and limitations
 
 - Pretrained COCO detection is general-purpose and can miss small, occluded, or unusual road users.
-- ByteTrack IDs can switch after long occlusions.
-- Pixel distances and pixel velocities are perspective-dependent. Physical speed or distance requires camera calibration or a homography.
+- Short ID changes may be stitched by time and projected position; long occlusions and crowded scenes can still cause identity errors.
+- Pixel distances and velocities are perspective-dependent and vary across the image. Physical speed, distance, and scientifically validated collision probability require camera calibration or a homography.
+- Constant-velocity projection cannot anticipate braking, acceleration, turning, or intent.
+- The selected conflict polygon and pixel thresholds must be reviewed for each camera view.
 - Uploaded videos are written locally to `.nearmiss_cache/`; they are not sent to a hosted API.
 - This MVP does not classify accidents and must not be used as an automated enforcement system.

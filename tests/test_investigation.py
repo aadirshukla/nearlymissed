@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from nearmiss.investigation import (
+    evidence_focus,
     evidence_timeline,
     build_investigation_export,
     clean_observations,
@@ -229,6 +230,24 @@ STITCHED_EVENT = {
     "participant_a_track_id": 1, "participant_a_track_ids": [1, 7],
     "participant_b_track_id": 2, "participant_b_track_ids": [2],
 }
+
+
+def test_evidence_focus_selects_stitched_participants_and_widens_filters():
+    catalog = [
+        {"track_id": 1, "object_type": "vehicle", "class_name": "car"},
+        {"track_id": 7, "object_type": "vehicle", "class_name": "truck"},
+        {"track_id": 2, "object_type": "pedestrian", "class_name": "person"},
+        {"track_id": 9, "object_type": "vehicle", "class_name": "bus"},
+    ]
+    [row] = evidence_timeline([{**STITCHED_EVENT, "participant_b_track_ids": [2, 44]}], [])
+    focus = evidence_focus(catalog, row, object_types=["vehicle"], class_names=["bus"])
+    # 44 has no stored observations, so it is not offered as a selection.
+    assert focus["track_ids"] == [1, 7, 2]
+    assert focus["object_types"] == ["vehicle", "pedestrian"]
+    assert focus["class_names"] == ["bus", "car", "truck", "person"]
+    unfiltered = evidence_focus(catalog, row)
+    assert unfiltered["object_types"] is None and unfiltered["class_names"] is None
+    assert evidence_focus(catalog, {"participant_track_ids": [99]})["track_ids"] == []
 
 
 def test_evidence_track_ids_include_stitched_raw_ids_in_order():

@@ -45,6 +45,11 @@ DEFAULT_CONFLICT_CONFIG = {
     "id_stitch_distance_box_ratio": 1.75,
     "vehicle_footprint_width_fraction": 0.20,
     "maximum_vehicle_radius_pixels": 24.0,
+    # Same-direction (rear-end) geometry: only consulted when two moving,
+    # aligned vehicles would otherwise be rejected as "not in the future".
+    "same_direction_following_enabled": True,
+    "following_min_speed_pixels_per_second": 20.0,
+    "following_min_direction_cosine": 0.94,
 }
 
 

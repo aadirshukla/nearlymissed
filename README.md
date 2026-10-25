@@ -75,6 +75,11 @@ or confuse a second YOLO/ByteTrack pass. Upload the original camera footage.
   and a qualifying arrival-time gap;
 - requires consecutive-frame evidence and merges repeat episodes for the same
   logical pair while preserving the earliest confirmed warning.
+- handles same-direction following separately: collinear paths would otherwise
+  place the conflict at the lead vehicle's current position (ETA 0). When two
+  moving, aligned vehicles fail that gate, the trailing vehicle is checked for
+  projected footprint contact within the horizon; severity uses time headway
+  (`conflict_geometry = "same_direction_following"`).
 
 The heuristic score is used only to rank active flags. It combines projected
 path overlap, arrival-time agreement, closing motion, and zone eligibility; it
@@ -128,6 +133,12 @@ The incident ID is the primary key, preventing duplicate review rows. Confirming
 an incident inserts one dispatch notification using a unique incident constraint;
 repeated confirmation cannot create duplicates. False alarms and uncertain
 reviews do not create notifications. Acknowledgement status is also persistent.
+If an operator later changes a confirmed incident to False Alarm or Uncertain,
+its notification becomes **Withdrawn** (kept as an audit record, no longer
+acknowledgeable); re-confirming restores it to New. Prediction warnings are
+linked to an incident only when raised strictly before first contact, and the
+incident's contact marker, boxes and timestamp all come from the first-contact
+frame (peak overlap is kept separately in `measurements`).
 
 ## Project layout
 
@@ -142,6 +153,9 @@ nearmiss/geometry.py       Polygon membership and zone enrichment
 nearmiss/events.py         Event normalization and CSV export
 nearmiss/safety.py         Metrics, heatmap, timeline, review/export helpers
 nearmiss/report.py         Source-backed PDF safety report
+nearmiss/demo.py           Labeled synthetic demo footage + scripted track rows
+nearmiss/explain.py        Plain-language evidence explanations
+nearmiss/streetlab.py      Street Lab summary, crossing illustration, brief
 tests/                     Synthetic unit tests and application contracts
 ```
 
@@ -162,7 +176,8 @@ Nested evidence is preserved in CSV/JSON exports.
 pytest -q
 ```
 
-Latest verified local result (2026-10-24): **35 passed**. A fresh end-to-end
+Latest verified local result (2026-10-25): **157 passed** (including Streamlit
+AppTest walk-throughs of the guided demo). The earlier 2026-10-24 baseline was 35. A fresh end-to-end
 run of `01_Accident_001.mp4` at confidence 0.31 processed 224 frames into 504
 track observations, returned one HIGH prediction at 1.033 seconds, and returned
 one independently detected suspected collision at 1.200 seconds. The suspected
@@ -190,15 +205,41 @@ audit trail.
 
 ## Demonstration
 
+### Guided synthetic demo (no footage or model needed)
+
+Select **Start guided demo** on Overview. NearMiss generates a short, clearly
+illustrative top-down intersection clip and deterministic scripted track rows
+locally (`nearmiss/demo.py`), caches them in the standard
+`.nearmiss_cache/<video id>/<analysis key>/` layout, and opens the results. Only
+YOLO/ByteTrack inference is bypassed; prediction, independent incident evidence,
+annotated playback, human review, and the simulated inbox are the normal
+pipeline. Every frame is stamped **SYNTHETIC DEMO**, an amber source banner is
+shown on every page, and exports carry `data_source = "synthetic_demo"` (tracks,
+warnings and incidents CSV, analysis JSON `provenance`, safety-report PDF, and
+the community brief). **Reset demo reviews** clears decisions for the demo ID
+only; **Return to real footage** restores the previous upload. See
+`docs/challenge-demo-guide.md` for a 2–3 minute script.
+
+### Uploaded footage
+
 1. Run `streamlit run app.py` and upload the original source MP4.
-2. Select **Analyze Video** and show the PREDICT warning in annotated playback.
-3. Open DETECT and select the genuine suspected-collision record.
-4. In VERIFY, replay the source clip and select **Confirm Incident**.
-5. In NOTIFY, open the newly created local dispatch message and acknowledge it.
+2. Select **Analyze Footage** and show the warning in annotated playback.
+3. Open **Incidents**, replay the source clip, and select **Confirm incident**.
+4. In **Dispatch**, acknowledge the newly created local message.
 
 If either detector returns no event, the corresponding stage shows an honest
-empty state. Synthetic fixtures exist only under `tests/` and never populate the
-dashboard.
+empty state. Synthetic data appears in the dashboard only through the labeled
+guided demo.
+
+### Street Lab and tool pages
+
+- **Street Lab** summarizes which candidate interactions warrant human review and
+  why, compares crossing times under user-entered assumptions (arithmetic only,
+  not a crash reduction), builds a follow-up observation checklist, and exports
+  a matching community review brief (PDF/Markdown).
+- **Investigation** steps through original frames with stored track rows.
+- **Explain & Share** explains one flagged moment and exports a Markdown brief.
+- **Library** saves footage-free run snapshots and compares them.
 
 ## Limitations
 

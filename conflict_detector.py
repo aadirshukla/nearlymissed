@@ -402,6 +402,79 @@ def _vehicle_radius(state: MotionState, config: dict) -> float:
     return min(maximum, max(2.0, width * fraction))
 
 
+def _following_conflict(
+    first: MotionState,
+    second: MotionState,
+    conflict_region_radius: float,
+    effective_margin: float,
+    horizon: float,
+    min_future_time: float,
+    config: dict,
+) -> dict[str, Any] | None:
+    """Same-direction (rear-end) geometry for two moving, aligned vehicles.
+
+    Collinear finite paths make the crossing-path closest point collapse onto
+    the lead vehicle's *current* position (ETA 0), which the future-conflict
+    gate correctly rejects for crossing traffic but which hides a trailing
+    vehicle closing on a slower leader. This branch is used only when that
+    gate would reject the pair. Contact time is the first moment the relative
+    bottom-center motion (offsets and lateral drift included) brings the
+    centers within the combined footprint radius; the timing measure is time
+    headway (seconds between the leader and follower passing the same point).
+    """
+
+    if not bool(config.get("same_direction_following_enabled", True)):
+        return None
+    min_speed = max(0.0, _setting(config, "following_min_speed_pixels_per_second", 20.0))
+    stationary_speed = max(0.0, _setting(config, "stationary_speed_pixels_per_second", 2.0))
+    if min(first.speed, second.speed) <= max(stationary_speed, EPSILON):
+        return None
+    cosine = float(np.dot(first.velocity, second.velocity) / (first.speed * second.speed))
+    if cosine < _setting(config, "following_min_direction_cosine", 0.94):
+        return None
+    direction = first.velocity / first.speed + second.velocity / second.speed
+    direction = direction / max(float(np.linalg.norm(direction)), EPSILON)
+    offset = second.position - first.position
+    longitudinal = float(np.dot(offset, direction))
+    lateral = abs(_cross_2d(direction, offset))
+    if lateral > conflict_region_radius + effective_margin:
+        return None
+    follower, leader = (first, second) if longitudinal > 0 else (second, first)
+    gap = abs(longitudinal)
+    follower_speed = float(np.dot(follower.velocity, direction))
+    closing = follower_speed - float(np.dot(leader.velocity, direction))
+    if closing <= EPSILON or follower_speed < max(min_speed, EPSILON) or gap <= conflict_region_radius:
+        return None
+    # First time the footprint circles touch: solve |r + v*t| = R on the full
+    # relative motion so lateral offset and lateral drift are both respected.
+    relative_position = leader.position - follower.position
+    relative_velocity = leader.velocity - follower.velocity
+    a = float(np.dot(relative_velocity, relative_velocity))
+    b = 2.0 * float(np.dot(relative_position, relative_velocity))
+    c = float(np.dot(relative_position, relative_position)) - conflict_region_radius**2
+    discriminant = b * b - 4.0 * a * c
+    if a <= EPSILON or c <= 0.0 or discriminant < 0.0:
+        return None
+    contact_time = (-b - float(np.sqrt(discriminant))) / (2.0 * a)
+    if not (min_future_time <= contact_time <= horizon):
+        return None
+    headway = gap / follower_speed
+    first_point = first.position + first.velocity * contact_time
+    second_point = second.position + second.velocity * contact_time
+    return {
+        "first_point": first_point,
+        "second_point": second_point,
+        "path_distance": lateral,
+        "first_eta": contact_time,
+        "second_eta": contact_time,
+        "arrival_gap": headway,
+        "time_headway_seconds": headway,
+        "following_gap_pixels": gap,
+        "follower_track_id": follower.current_track_id,
+        "leader_track_id": leader.current_track_id,
+    }
+
+
 def _candidate_event(
     first: MotionState,
     second: MotionState,
@@ -460,16 +533,34 @@ def _candidate_event(
 
     first_eta = first_fraction * horizon
     second_eta = second_fraction * horizon
-    if not first_stationary and first_eta < min_future_time:
-        return None
-    if not second_stationary and second_eta < min_future_time:
-        return None
+    arrival_gap = abs(first_eta - second_eta)
+    following = None
+    if (not first_stationary and first_eta < min_future_time) or (
+        not second_stationary and second_eta < min_future_time
+    ):
+        following = _following_conflict(
+            first,
+            second,
+            conflict_region_radius,
+            effective_margin,
+            horizon,
+            min_future_time,
+            config,
+        )
+        if following is None:
+            return None
+        first_point = following["first_point"]
+        second_point = following["second_point"]
+        path_distance = following["path_distance"]
+        footprint_overlap = path_distance <= conflict_region_radius
+        first_eta = following["first_eta"]
+        second_eta = following["second_eta"]
+        arrival_gap = following["arrival_gap"]
 
     conflict_point = (first_point + second_point) / 2.0
     if not _point_in_polygon(conflict_point, zone):
         return None
 
-    arrival_gap = abs(first_eta - second_eta)
     severity = _severity(arrival_gap, config)
     if severity is None:
         return None
@@ -496,11 +587,21 @@ def _candidate_event(
         35.0 * path_component + 35.0 * timing_component + 20.0 * closing_component + 10.0,
         1,
     )
+    geometry: dict[str, Any] = {"conflict_geometry": "crossing_paths"}
+    if following is not None:
+        geometry = {
+            "conflict_geometry": "same_direction_following",
+            "time_headway_seconds": round(following["time_headway_seconds"], 3),
+            "following_gap_pixels": round(following["following_gap_pixels"], 2),
+            "follower_track_id": following["follower_track_id"],
+            "leader_track_id": following["leader_track_id"],
+        }
     return {
         "timestamp_seconds": round(float(max(first.timestamp, second.timestamp)), 3),
         "frame_index": max(first.frame_index, second.frame_index),
         "severity": severity,
         "risk_score": heuristic_score,
+        **geometry,
         "participant_a_track_id": first.current_track_id,
         "participant_b_track_id": second.current_track_id,
         "participant_a_track_ids": list(first.source_track_ids),
@@ -596,9 +697,37 @@ def _pair_diagnostic(
     footprint_overlap = path_distance <= conflict_region_radius
     first_eta = first_fraction * horizon
     second_eta = second_fraction * horizon
+    arrival_gap = abs(first_eta - second_eta)
+    conflict_geometry = "crossing_paths"
+    not_in_future = (not first_stationary and first_eta < min_future_time) or (
+        not second_stationary and second_eta < min_future_time
+    )
+    if (
+        not_in_future
+        and closing_speed >= min_closing
+        and path_distance <= conflict_region_radius + effective_margin
+    ):
+        following = _following_conflict(
+            first,
+            second,
+            conflict_region_radius,
+            effective_margin,
+            horizon,
+            min_future_time,
+            config,
+        )
+        if following is not None:
+            not_in_future = False
+            conflict_geometry = "same_direction_following"
+            first_point = following["first_point"]
+            second_point = following["second_point"]
+            path_distance = following["path_distance"]
+            footprint_overlap = path_distance <= conflict_region_radius
+            first_eta = following["first_eta"]
+            second_eta = following["second_eta"]
+            arrival_gap = following["arrival_gap"]
     conflict_point = (first_point + second_point) / 2.0
     inside_zone = _point_in_polygon(conflict_point, zone)
-    arrival_gap = abs(first_eta - second_eta)
 
     reason = "accepted"
     if closing_speed < min_closing:
@@ -607,9 +736,7 @@ def _pair_diagnostic(
         reason = "both_stationary"
     elif path_distance > conflict_region_radius + effective_margin:
         reason = "projected_paths_separated"
-    elif (not first_stationary and first_eta < min_future_time) or (
-        not second_stationary and second_eta < min_future_time
-    ):
+    elif not_in_future:
         reason = "conflict_is_not_in_future"
     elif not inside_zone:
         reason = "conflict_point_outside_zone"
@@ -643,6 +770,7 @@ def _pair_diagnostic(
         "closing_speed_pixels_per_second": round(closing_speed, 2),
         "conflict_point": [round(float(value), 2) for value in conflict_point],
         "inside_conflict_zone": inside_zone,
+        "conflict_geometry": conflict_geometry,
         "participant_a_mean_confidence": round(first.mean_confidence, 3),
         "participant_b_mean_confidence": round(second.mean_confidence, 3),
         "participant_a_velocity_samples": first.velocity_samples,
@@ -996,11 +1124,19 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
                 event[f"vehicle_{suffix}"] = event[f"{vehicle_prefix}_{suffix}"]
                 event[f"pedestrian_{suffix}"] = event[f"{pedestrian_prefix}_{suffix}"]
         area_label = "selected zone" if event.get("zone_is_user_defined", True) else "whole frame"
-        event["description"] = (
-            f'{event["severity"]} provisional image-coordinate flag: projected paths '
-            f'converge inside the {area_label} with a {event["arrival_time_gap_seconds"]:.2f}s '
-            f'arrival gap and {event["path_separation_pixels"]:.1f}px projected separation.'
-        )
+        if event.get("conflict_geometry") == "same_direction_following":
+            event["description"] = (
+                f'{event["severity"]} provisional image-coordinate flag: a trailing vehicle '
+                f'is closing on a slower vehicle in the same direction inside the {area_label}; '
+                f'projected footprint contact in {event["time_to_conflict_seconds"]:.2f}s '
+                f'with a {event["arrival_time_gap_seconds"]:.2f}s time headway.'
+            )
+        else:
+            event["description"] = (
+                f'{event["severity"]} provisional image-coordinate flag: projected paths '
+                f'converge inside the {area_label} with a {event["arrival_time_gap_seconds"]:.2f}s '
+                f'arrival gap and {event["path_separation_pixels"]:.1f}px projected separation.'
+            )
         event["metrics"] = {
             "arrival_time_gap_seconds": event["arrival_time_gap_seconds"],
             "time_to_conflict_seconds": event["time_to_conflict_seconds"],

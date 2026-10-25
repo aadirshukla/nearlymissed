@@ -77,7 +77,7 @@ st.set_page_config(
     page_title="NearMiss Safety Operations",
     page_icon="◉",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -97,6 +97,7 @@ def apply_styles() -> None:
           BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing:antialiased; }}
         .stApp {{ background:var(--nm-bg); color:var(--nm-text); }}
         [data-testid="stHeader"] {{ background:rgba(9,9,11,.92); border-bottom:1px solid transparent; }}
+        [data-testid="stAppDeployButton"], #MainMenu {{ display:none !important; }}
         [data-testid="stMainBlockContainer"] {{ max-width:1180px; padding:5rem 3rem 6rem; }}
         [data-testid="stSidebar"] {{ background:#0C0C0E; border-right:1px solid var(--nm-border);
           min-width:232px !important; max-width:232px !important; }}
@@ -139,10 +140,39 @@ def apply_styles() -> None:
         .nm-status.critical {{ color:#E18A8E; border-color:#573236; }}
         .nm-empty {{ border-top:1px solid var(--nm-border); border-bottom:1px solid var(--nm-border);
           padding:3.2rem 1rem; text-align:center; background:transparent; color:#71717A; }}
-        .nm-workflow {{ display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--nm-border);
-          border-bottom:1px solid var(--nm-border); margin:-.5rem 0 2.8rem; }}
-        .nm-workflow-step {{ padding:.85rem 0; color:#71717A; font-size:.72rem; }}
-        .nm-workflow-step strong {{ color:#D4D4D8; font-weight:540; margin-right:.35rem; }}
+        .st-key-nearmiss_hero {{ position:relative; isolation:isolate; overflow:hidden;
+          min-height:760px; margin:-5rem -3rem 4.5rem; padding:7rem clamp(2rem,6vw,6rem) 4rem;
+          background-image:url('/app/static/nearmiss-hero.jpg'); background-size:cover;
+          background-position:center 58%; border-bottom:1px solid #27272A;
+          display:flex !important; flex-direction:column; justify-content:center; align-items:center; }}
+        .st-key-nearmiss_hero::before {{ content:""; position:absolute; inset:0; z-index:-1;
+          background:rgba(5,7,10,.68); }}
+        .st-key-nearmiss_hero > div {{ width:100%; }}
+        .nm-hero-mark {{ color:rgba(255,255,255,.68); font-size:.68rem; font-weight:550;
+          letter-spacing:.16em; text-transform:uppercase; text-align:center; margin-bottom:2rem; }}
+        .nm-hero-title {{ color:#FFFFFF; font-size:clamp(3.6rem,6.4vw,6.1rem); line-height:.98;
+          letter-spacing:-.065em; font-weight:320; text-align:center; max-width:1050px;
+          margin:0 auto !important; font-size:clamp(3.6rem,6.4vw,6.1rem) !important;
+          line-height:.98 !important; font-weight:320 !important; }}
+        .nm-hero-title em {{ font-family:Georgia,"Times New Roman",serif; font-weight:400;
+          letter-spacing:-.045em; }}
+        .nm-hero-copy {{ color:rgba(255,255,255,.78); font-size:1.02rem; line-height:1.65;
+          text-align:center; max-width:650px; margin:1.65rem auto 2rem !important; }}
+        .nm-hero-proof {{ color:rgba(255,255,255,.58); font-size:.7rem; text-align:center;
+          letter-spacing:.02em; margin-top:1rem; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploader"] {{ width:min(620px,100%);
+          margin-left:auto !important; margin-right:auto !important; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploader"] > label {{ display:none; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] {{
+          background:rgba(5,5,7,.42); border-color:rgba(255,255,255,.30);
+          backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"]:hover {{
+          background:rgba(5,5,7,.56); border-color:rgba(255,255,255,.58); }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] button {{
+          background:#C7C9CC !important; border-color:#C7C9CC !important; color:#111214 !important;
+          box-shadow:none !important; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] button:hover {{
+          background:#E1E2E4 !important; border-color:#E1E2E4 !important; }}
         .nm-file-meta {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
           gap:1.2rem 1rem; margin-top:1.25rem; }}
         .nm-file-meta-item {{ border-top:1px solid var(--nm-border); padding-top:.75rem; min-width:0; }}
@@ -193,6 +223,8 @@ def apply_styles() -> None:
           [data-testid="stSidebar"] {{ min-width:205px !important; max-width:205px !important; }}
           [data-testid="stMainBlockContainer"] {{ padding:4.5rem 1.5rem 4rem; }}
           .nm-page-title {{ font-size:2.15rem; }}
+          .st-key-nearmiss_hero {{ margin:-4.5rem -1.5rem 3.5rem; padding:6rem 2rem 3rem;
+            min-height:720px; }}
           .st-key-overview_media [data-testid="stHorizontalBlock"] {{ flex-direction:column; }}
           .st-key-overview_media [data-testid="stColumn"] {{ width:100% !important;
             flex:1 1 100% !important; }}
@@ -201,12 +233,58 @@ def apply_styles() -> None:
           [data-testid="stMainBlockContainer"] {{ padding:4.2rem 1rem 4rem; }}
           .nm-page-title {{ font-size:1.9rem; }}
           .nm-page-subtitle {{ margin-bottom:2.2rem; }}
-          .nm-workflow {{ grid-template-columns:repeat(2,1fr); }}
+          .st-key-nearmiss_hero {{ margin:-4.2rem -1rem 3rem; padding:5.5rem 1.1rem 2.5rem;
+            min-height:680px; }}
+          .nm-hero-title {{ font-size:3rem; }}
+          .nm-hero-copy {{ font-size:.92rem; }}
         }}
         @media (prefers-reduced-motion: reduce) {{
           *, *::before, *::after {{ transition-duration:.01ms !important;
             animation-duration:.01ms !important; animation-iteration-count:1 !important; }}
         }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def apply_overview_shell() -> None:
+    """Let the Overview image span the viewport while keeping the sidebar optional."""
+    st.markdown(
+        """
+        <style>
+        .stApp {
+          background-image:url('/app/static/nearmiss-hero.jpg') !important;
+          background-size:cover !important;
+          background-position:center center !important;
+          background-attachment:fixed !important;
+        }
+        [data-testid="stAppViewContainer"], [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] { background:transparent !important; }
+        [data-testid="stMainBlockContainer"] {
+          max-width:none !important; padding:0 !important; margin:0 !important;
+        }
+        [data-testid="stHeader"] { background:transparent !important; }
+        [data-testid="stSidebar"] {
+          background:rgba(9,10,12,.82) !important;
+          border-right:1px solid rgba(199,201,204,.18) !important;
+          backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+        }
+        [data-testid="stSidebar"][data-collapsed="true"] {
+          width:0 !important; min-width:0 !important; max-width:0 !important;
+          flex:0 0 0 !important; border:0 !important; backdrop-filter:none !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="stSidebarCollapseButton"] button {
+          color:#D6D7D9 !important; background:rgba(16,17,20,.58) !important;
+          border:1px solid rgba(199,201,204,.24) !important; border-radius:4px !important;
+        }
+        .st-key-nearmiss_hero {
+          width:100% !important; min-height:100vh !important; margin:0 !important;
+          padding:clamp(5rem,9vh,8rem) clamp(1.25rem,7vw,8rem) 4rem !important;
+          background-image:none !important; border:0 !important;
+        }
+        .st-key-nearmiss_hero::before { background:rgba(6,8,11,.55) !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -391,6 +469,8 @@ st.session_state["navigation"] = legacy_navigation.get(
 if "_next_page" in st.session_state:
     requested_page = st.session_state.pop("_next_page")
     st.session_state["navigation"] = legacy_navigation.get(requested_page, requested_page)
+if st.session_state["navigation"] == "Overview":
+    apply_overview_shell()
 
 
 with st.sidebar:
@@ -504,43 +584,38 @@ collision_config = {
 active_video = st.session_state.get("active_video")
 
 if navigation == "Overview":
-    page_header(
-        "Overview",
-        "Turn traffic footage into reviewable evidence.",
-        "NearMiss follows vehicle movement, surfaces possible conflicts, and keeps every operator decision connected to the original video.",
-    )
-    st.markdown(
-        '<div class="nm-workflow">'
-        '<div class="nm-workflow-step"><strong>1</strong>Upload footage</div>'
-        '<div class="nm-workflow-step"><strong>2</strong>Run analysis</div>'
-        '<div class="nm-workflow-step"><strong>3</strong>Review evidence</div>'
-        '<div class="nm-workflow-step"><strong>4</strong>Acknowledge</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    uploaded = st.file_uploader(
-        "Traffic camera video",
-        type=["mp4"],
-        key=f'video_upload_{st.session_state["upload_generation"]}',
-        help="Use original footage rather than a previously annotated export.",
-    )
-    if uploaded is not None:
-        try:
-            video_hash, source_path = save_upload(uploaded.getvalue(), uploaded.name)
-            st.session_state["active_video"] = {
-                "name": uploaded.name,
-                "video_hash": video_hash,
-                "source_path": str(source_path),
-            }
-            active_video = st.session_state["active_video"]
-        except VideoError as exc:
-            st.error(str(exc))
+    with st.container(key="nearmiss_hero"):
+        st.markdown(
+            '<div class="nm-hero-mark">NearMiss / Intersection safety</div>'
+            '<h1 class="nm-hero-title">See the moments<br><em>before impact.</em></h1>'
+            '<p class="nm-hero-copy">Turn fixed-camera traffic footage into reviewable '
+            'vehicle trajectories, potential conflict warnings, and operator-ready evidence.</p>',
+            unsafe_allow_html=True,
+        )
+        uploaded = st.file_uploader(
+            "Traffic camera video",
+            type=["mp4"],
+            key=f'video_upload_{st.session_state["upload_generation"]}',
+            help="Use original footage rather than a previously annotated export.",
+        )
+        st.markdown(
+            '<div class="nm-hero-proof">Local processing &nbsp;·&nbsp; Human verification required '
+            '&nbsp;·&nbsp; No emergency-service connection</div>',
+            unsafe_allow_html=True,
+        )
+        if uploaded is not None:
+            try:
+                video_hash, source_path = save_upload(uploaded.getvalue(), uploaded.name)
+                st.session_state["active_video"] = {
+                    "name": uploaded.name,
+                    "video_hash": video_hash,
+                    "source_path": str(source_path),
+                }
+                active_video = st.session_state["active_video"]
+            except VideoError as exc:
+                st.error(str(exc))
 
     if not active_video or not Path(active_video["source_path"]).exists():
-        empty_state(
-            "No footage selected",
-            "Drop an MP4 above to preview it and begin analysis.",
-        )
         st.stop()
 
     source_path = Path(active_video["source_path"])

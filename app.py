@@ -141,6 +141,7 @@ def apply_styles() -> None:
           font-feature-settings:"tnum" 1, "cv11" 1; }}
         .stApp {{ background:var(--nm-bg); color:var(--nm-text); }}
         [data-testid="stHeader"] {{ background:rgba(11,11,12,.92); }}
+        [data-testid="stAppDeployButton"], #MainMenu {{ display:none !important; }}
         [data-testid="stMainBlockContainer"] {{ max-width:1180px; padding:4.5rem 3rem 6rem; }}
         [data-testid="stSidebar"] {{ background:#0E0E10; border-right:1px solid var(--nm-border); }}
         /* Fixed width only on wide screens and only while expanded, so the
@@ -211,18 +212,56 @@ def apply_styles() -> None:
         .nm-explain ul {{ margin:0; padding-left:1.1rem; color:#C9C4BE; font-size:.86rem; line-height:1.6; }}
         .nm-explain p {{ color:#8A847E; font-size:.78rem; margin:.5rem 0 0; }}
         .nm-file-meta {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1.2rem 1rem; margin-top:1.25rem; }}
+        .st-key-nearmiss_hero {{ position:relative; isolation:isolate; overflow:hidden;
+          min-height:760px; margin:-5rem -3rem 4.5rem; padding:7rem clamp(2rem,6vw,6rem) 4rem;
+          background-image:url('/app/static/nearmiss-hero.jpg'); background-size:cover;
+          background-position:center 58%; border-bottom:1px solid #27272A;
+          display:flex !important; flex-direction:column; justify-content:center; align-items:center; }}
+        .st-key-nearmiss_hero::before {{ content:""; position:absolute; inset:0; z-index:-1;
+          background:rgba(5,7,10,.68); }}
+        .st-key-nearmiss_hero > div {{ width:100%; }}
+        .nm-hero-mark {{ color:rgba(255,255,255,.68); font-size:.68rem; font-weight:550;
+          letter-spacing:.16em; text-transform:uppercase; text-align:center; margin-bottom:2rem; }}
+        .nm-hero-title {{ color:#FFFFFF; font-size:clamp(3.6rem,6.4vw,6.1rem); line-height:.98;
+          letter-spacing:-.065em; font-weight:320; text-align:center; max-width:1050px;
+          margin:0 auto !important; font-size:clamp(3.6rem,6.4vw,6.1rem) !important;
+          line-height:.98 !important; font-weight:320 !important; }}
+        .nm-hero-title em {{ font-family:Georgia,"Times New Roman",serif; font-weight:400;
+          letter-spacing:-.045em; }}
+        .nm-hero-copy {{ color:rgba(255,255,255,.78); font-size:1.02rem; line-height:1.65;
+          text-align:center; max-width:650px; margin:1.65rem auto 2rem !important; }}
+        .nm-hero-proof {{ color:rgba(255,255,255,.58); font-size:.7rem; text-align:center;
+          letter-spacing:.02em; margin-top:1rem; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploader"] {{ width:min(620px,100%);
+          margin-left:auto !important; margin-right:auto !important; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploader"] > label {{ display:none; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] {{
+          background:rgba(5,5,7,.42); border-color:rgba(255,255,255,.30);
+          backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"]:hover {{
+          background:rgba(5,5,7,.56); border-color:rgba(255,255,255,.58); }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] button {{
+          background:#C7C9CC !important; border-color:#C7C9CC !important; color:#111214 !important;
+          box-shadow:none !important; }}
+        .st-key-nearmiss_hero [data-testid="stFileUploaderDropzone"] button:hover {{
+          background:#E1E2E4 !important; border-color:#E1E2E4 !important; }}
+        .st-key-nearmiss_hero .stButton {{ display:flex; justify-content:center; }}
+        .st-key-nearmiss_hero .stButton > button {{ width:min(620px,100%); min-height:3rem;
+          font-size:1rem; }}
+        .nm-hero-demo-note {{ color:rgba(255,255,255,.78); font-size:.8rem; text-align:center;
+          margin:.55rem auto 1.6rem; max-width:620px; line-height:1.5; }}
+        .nm-hero-or {{ color:rgba(255,255,255,.68); font-size:.72rem; letter-spacing:.12em;
+          text-transform:uppercase; text-align:center; margin:0 auto .7rem; }}
+        .nm-hero-credit {{ color:rgba(255,255,255,.62); font-size:.68rem; text-align:center;
+          margin-top:.45rem; }}
+        /* Text below the photograph sits on an opaque panel for legibility. */
+        .st-key-overview_explainer {{ background:var(--nm-bg); max-width:1180px; margin:0 auto;
+          padding:1rem 3rem 5rem; border-radius:10px 10px 0 0; }}
         .nm-file-meta-item {{ border-top:1px solid var(--nm-border); padding-top:.75rem; min-width:0; }}
         .nm-file-meta-label {{ color:#8A847E; font-size:.7rem; margin-bottom:.28rem; }}
         .nm-file-meta-value {{ color:#E7E5E4; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
         .nm-row-separator {{ height:1px; background:var(--nm-border); margin:.65rem 0; }}
         .nm-meta {{ color:#8A847E; font-size:.78rem; line-height:1.6; }}
-        .nm-hero-visual {{ width:100%; height:auto; display:block; border-radius:10px;
-          border:1px solid var(--nm-border); }}
-        .nm-pulse {{ transform-origin:252px 175px; transform-box:view-box; }}
-        @media (prefers-reduced-motion: no-preference) {{
-          .nm-pulse {{ animation:nm-pulse 2.4s var(--nm-ease) infinite; }}
-          @keyframes nm-pulse {{ 0% {{ opacity:.9; transform:scale(.6); }} 100% {{ opacity:0; transform:scale(1.9); }} }}
-        }}
         [data-testid="stMetric"] {{ background:transparent; border:0; border-top:1px solid var(--nm-border);
           padding:1rem 0 .65rem; border-radius:0; box-shadow:none; min-height:90px; }}
         [data-testid="stMetricLabel"] {{ color:#8A847E; font-size:.72rem; }}
@@ -254,6 +293,21 @@ def apply_styles() -> None:
         [data-baseweb="input"]:focus-within, [data-baseweb="select"] > div:focus-within,
         [data-baseweb="textarea"]:focus-within {{ box-shadow:0 0 0 2px var(--nm-signal) !important; }}
         [role="slider"]:focus-visible {{ box-shadow:0 0 0 3px var(--nm-signal) !important; }}
+        /* Selected multiselect chips: the light theme primary would render white
+           text on a white chip, so pin a dark chip with light text and icon. */
+        [data-baseweb="tag"], span[data-tag] {{ background:#24211D !important;
+          border:1px solid #57534E !important; color:#F5F5F4 !important; }}
+        [data-baseweb="tag"] span, span[data-tag] span,
+        [data-baseweb="tag"] [title], span[data-tag] [title] {{ color:#F5F5F4 !important; }}
+        [data-baseweb="tag"] svg, span[data-tag] svg {{ color:#D6D3D1 !important;
+          fill:currentColor !important; }}
+        [data-baseweb="tag"]:hover, span[data-tag]:hover {{ background:#2E2A25 !important;
+          border-color:#78716C !important; }}
+        [data-baseweb="tag"] [role="presentation"]:hover svg,
+        span[data-tag] [role="presentation"]:hover svg {{ color:var(--nm-signal) !important; }}
+        [data-baseweb="tag"]:focus-within, span[data-tag]:focus-within,
+        [data-baseweb="tag"]:focus-visible, span[data-tag]:focus-visible {{
+          outline:2px solid var(--nm-signal) !important; outline-offset:1px; }}
         [data-testid="stTabs"] [role="tablist"] {{ gap:1.35rem; border-bottom:1px solid var(--nm-border); }}
         [data-testid="stTabs"] button {{ color:#8A847E; padding:.65rem 0; font-size:.82rem; }}
         [data-testid="stTabs"] button[aria-selected="true"] {{ color:var(--nm-text); }}
@@ -268,16 +322,23 @@ def apply_styles() -> None:
         @media (max-width: 900px) {{
           [data-testid="stMainBlockContainer"] {{ padding:4.2rem 1.4rem 4rem; }}
           .nm-page-title {{ font-size:2.15rem; }}
-          .st-key-overview_media [data-testid="stHorizontalBlock"],
-          .st-key-overview_hero [data-testid="stHorizontalBlock"] {{ flex-direction:column; }}
-          .st-key-overview_media [data-testid="stColumn"],
-          .st-key-overview_hero [data-testid="stColumn"] {{ width:100% !important; flex:1 1 100% !important; }}
+          .st-key-overview_media [data-testid="stHorizontalBlock"] {{ flex-direction:column; }}
+          .st-key-overview_media [data-testid="stColumn"] {{ width:100% !important;
+            flex:1 1 100% !important; }}
+          .st-key-nearmiss_hero {{ margin:-4.5rem -1.5rem 3.5rem; padding:6rem 2rem 3rem;
+            min-height:720px; }}
+          .st-key-overview_explainer {{ padding:1rem 1.4rem 4rem; }}
         }}
         @media (max-width: 640px) {{
           [data-testid="stMainBlockContainer"] {{ padding:4rem 1rem 4rem; }}
           .nm-page-title {{ font-size:1.85rem; }}
           .nm-page-subtitle {{ margin-bottom:1.8rem; }}
           .nm-pipeline li {{ grid-template-columns:1fr; gap:.2rem; }}
+          .st-key-nearmiss_hero {{ margin:-4.2rem -1rem 3rem; padding:5.5rem 1.1rem 2.5rem;
+            min-height:680px; }}
+          .nm-hero-title {{ font-size:3rem !important; }}
+          .nm-hero-copy {{ font-size:.92rem; }}
+          .st-key-overview_explainer {{ padding:1rem 1rem 4rem; }}
         }}
         @media (prefers-reduced-motion: reduce) {{
           *, *::before, *::after {{ transition-duration:.01ms !important;
@@ -290,44 +351,54 @@ def apply_styles() -> None:
     )
 
 
-INTERSECTION_SVG = """
-<svg class="nm-hero-visual" viewBox="0 0 480 320" role="img"
-  aria-label="Illustration: an intersection where two projected vehicle paths converge at one conflict point">
-  <rect width="480" height="320" fill="#0F0F11"/>
-  <g fill="#17171A"><rect x="16" y="14" width="168" height="90" rx="4"/><rect x="296" y="14" width="168" height="90" rx="4"/>
-  <rect x="16" y="216" width="168" height="90" rx="4"/><rect x="296" y="216" width="168" height="90" rx="4"/></g>
-  <rect x="0" y="120" width="480" height="80" fill="#222225"/>
-  <rect x="200" y="0" width="80" height="320" fill="#222225"/>
-  <g stroke="#8A6A33" stroke-width="1.5"><line x1="0" y1="158" x2="176" y2="158"/><line x1="0" y1="162" x2="176" y2="162"/>
-  <line x1="304" y1="158" x2="480" y2="158"/><line x1="304" y1="162" x2="480" y2="162"/>
-  <line x1="238" y1="0" x2="238" y2="96"/><line x1="242" y1="0" x2="242" y2="96"/>
-  <line x1="238" y1="224" x2="238" y2="320"/><line x1="242" y1="224" x2="242" y2="320"/></g>
-  <g fill="#3A3A3E"><rect x="182" y="124" width="12" height="6"/><rect x="182" y="136" width="12" height="6"/>
-  <rect x="182" y="148" width="12" height="6"/><rect x="182" y="166" width="12" height="6"/><rect x="182" y="178" width="12" height="6"/>
-  <rect x="182" y="190" width="12" height="6"/><rect x="286" y="124" width="12" height="6"/><rect x="286" y="136" width="12" height="6"/>
-  <rect x="286" y="148" width="12" height="6"/><rect x="286" y="166" width="12" height="6"/><rect x="286" y="178" width="12" height="6"/>
-  <rect x="286" y="190" width="12" height="6"/><rect x="204" y="206" width="6" height="12"/><rect x="216" y="206" width="6" height="12"/>
-  <rect x="228" y="206" width="6" height="12"/><rect x="246" y="206" width="6" height="12"/><rect x="258" y="206" width="6" height="12"/>
-  <rect x="270" y="206" width="6" height="12"/></g>
-  <line x1="102" y1="175" x2="246" y2="175" stroke="#F2A93B" stroke-width="2.5" stroke-dasharray="7 6"/>
-  <line x1="252" y1="246" x2="252" y2="181" stroke="#F5F5F4" stroke-width="2.5" stroke-dasharray="7 6"/>
-  <rect x="68" y="167" width="32" height="16" rx="3" fill="#F2A93B"/>
-  <rect x="244" y="248" width="16" height="32" rx="3" fill="#D6D3D1"/>
-  <circle class="nm-pulse" cx="252" cy="175" r="16" fill="none" stroke="#F2A93B" stroke-width="2"/>
-  <circle cx="252" cy="175" r="10" fill="none" stroke="#F2A93B" stroke-width="2.5"/>
-  <circle cx="252" cy="175" r="3" fill="#F2A93B"/>
-  <g font-family="Inter, ui-sans-serif, sans-serif" font-size="11" fill="#B5B0AA">
-  <text x="270" y="152">conflict point</text><text x="270" y="166" fill="#F2A93B">arrival gap 0.24 s</text>
-  <text x="70" y="160">car A</text><text x="268" y="270">car B</text>
-  <text x="16" y="312" fill="#6B6661">Illustration only</text></g>
-</svg>
-"""
-
 BRAND_MARK = (
     '<svg class="nm-brand-mark" viewBox="0 0 22 22" aria-hidden="true">'
     '<rect x="8" y="0" width="6" height="22" fill="#2A2A2E"/><rect x="0" y="8" width="22" height="6" fill="#2A2A2E"/>'
     '<circle cx="11" cy="11" r="4.2" fill="none" stroke="#F2A93B" stroke-width="2"/></svg>'
 )
+
+
+def apply_overview_shell() -> None:
+    """Let the Overview image span the viewport while keeping the sidebar optional."""
+    st.markdown(
+        """
+        <style>
+        .stApp {
+          background-image:url('/app/static/nearmiss-hero.jpg') !important;
+          background-size:cover !important;
+          background-position:center center !important;
+          background-attachment:fixed !important;
+        }
+        [data-testid="stAppViewContainer"], [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] { background:transparent !important; }
+        [data-testid="stMainBlockContainer"] {
+          max-width:none !important; padding:0 !important; margin:0 !important;
+        }
+        [data-testid="stHeader"] { background:transparent !important; }
+        [data-testid="stSidebar"] {
+          background:rgba(9,10,12,.82) !important;
+          border-right:1px solid rgba(199,201,204,.18) !important;
+          backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+        }
+        [data-testid="stSidebar"][data-collapsed="true"] {
+          width:0 !important; min-width:0 !important; max-width:0 !important;
+          flex:0 0 0 !important; border:0 !important; backdrop-filter:none !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="stSidebarCollapseButton"] button {
+          color:#D6D7D9 !important; background:rgba(16,17,20,.58) !important;
+          border:1px solid rgba(199,201,204,.24) !important; border-radius:4px !important;
+        }
+        .st-key-nearmiss_hero {
+          width:100% !important; min-height:100vh !important; margin:0 !important;
+          padding:clamp(5rem,9vh,8rem) clamp(1.25rem,7vw,8rem) 4rem !important;
+          background-image:none !important; border:0 !important;
+        }
+        .st-key-nearmiss_hero::before { background:rgba(6,8,11,.55) !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def page_header(kicker: str, title: str, subtitle: str) -> None:
@@ -649,6 +720,11 @@ active_is_demo = bool(active_video) and is_demo_video_id(active_video.get("video
 if active_is_demo and not Path(active_video["source_path"]).exists():
     # The processed-video cache was cleared; regenerate the deterministic demo.
     active_video = st.session_state["active_video"] = demo_active_video()
+if st.session_state["navigation"] == "Overview" and not (
+    active_video and Path(active_video["source_path"]).exists()
+):
+    # Full-photo landing only; pages with evidence keep the dark interface.
+    apply_overview_shell()
 
 
 with st.sidebar:
@@ -819,29 +895,34 @@ if navigation == "Overview":
         st.stop()
 
     if not active_video or not Path(active_video["source_path"]).exists():
-        hero = st.container(key="overview_hero")
-        copy_col, visual_col = hero.columns([1.05, 1], gap="large")
-        with copy_col:
-            page_header(
-                "NearMiss · Intersection safety evidence",
-                "Find the close calls hiding in traffic footage.",
-                "NearMiss follows road users, flags moments when their projected paths and timing "
-                "converge, and keeps every warning tied to evidence a person can check.",
+        with st.container(key="nearmiss_hero"):
+            st.markdown(
+                '<div class="nm-hero-mark">NearMiss / Intersection safety</div>'
+                '<h1 class="nm-hero-title">See the moments<br><em>before impact.</em></h1>'
+                '<p class="nm-hero-copy">Turn fixed-camera traffic footage into reviewable '
+                'vehicle trajectories, potential conflict warnings, and operator-ready evidence.</p>',
+                unsafe_allow_html=True,
             )
-            st.button(
-                "Start guided demo",
-                type="primary",
-                on_click=start_demo,
-                key="start_demo",
-                width="stretch",
+            st.button("Start guided demo", type="primary", on_click=start_demo, key="start_demo")
+            st.markdown(
+                '<p class="nm-hero-demo-note">About 2 minutes. Uses a generated, clearly labeled '
+                "intersection: no upload, network, or model download needed.</p>"
+                '<div class="nm-hero-or">Or analyze your own footage</div>',
+                unsafe_allow_html=True,
             )
-            st.caption(
-                "About 2 minutes. Uses a generated, clearly labeled intersection: no upload, "
-                "network, or model download needed."
+            uploaded = st.file_uploader(
+                "Traffic camera video",
+                type=["mp4"],
+                key=f'video_upload_{st.session_state["upload_generation"]}',
+                help="Use original footage rather than a previously annotated export.",
             )
-        with visual_col:
-            st.markdown(INTERSECTION_SVG, unsafe_allow_html=True)
-        section_header("Or analyze your own footage", "Original fixed-camera MP4 footage works best.")
+            st.markdown(
+                '<div class="nm-hero-proof">Local processing &nbsp;·&nbsp; Human verification required '
+                "&nbsp;·&nbsp; No emergency-service connection</div>"
+                '<div class="nm-hero-credit">Background photograph is illustrative context only, '
+                "not analyzed footage.</div>",
+                unsafe_allow_html=True,
+            )
     else:
         page_header(
             "Overview",
@@ -849,13 +930,12 @@ if navigation == "Overview":
             "NearMiss follows vehicle movement, surfaces possible conflicts, and keeps every operator "
             "decision connected to the original video.",
         )
-
-    uploaded = st.file_uploader(
-        "Traffic camera video",
-        type=["mp4"],
-        key=f'video_upload_{st.session_state["upload_generation"]}',
-        help="Use original footage rather than a previously annotated export.",
-    )
+        uploaded = st.file_uploader(
+            "Traffic camera video",
+            type=["mp4"],
+            key=f'video_upload_{st.session_state["upload_generation"]}',
+            help="Use original footage rather than a previously annotated export.",
+        )
     if uploaded is not None:
         try:
             video_hash, source_path = save_upload(uploaded.getvalue(), uploaded.name)
@@ -869,7 +949,8 @@ if navigation == "Overview":
             st.error(str(exc))
 
     if not active_video or not Path(active_video["source_path"]).exists():
-        render_pipeline_explainer()
+        with st.container(key="overview_explainer"):
+            render_pipeline_explainer()
         st.stop()
 
     source_path = Path(active_video["source_path"])

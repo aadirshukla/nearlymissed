@@ -25,11 +25,13 @@ you change Advanced settings, the results change, and that is part of the point.
 ## Script (about 2½ minutes)
 
 **0:00 — Overview (20 s).**
-"NearMiss looks for close calls in traffic footage: moments when two road users'
+The landing page shows a full-bleed street photograph headed "See the moments
+before impact." The photo is labeled as illustrative context, not analyzed
+footage. "NearMiss looks for close calls in traffic footage: moments when two road users'
 projected paths and timing converge. Every warning stays tied to evidence a
 person can check. I'll use the guided demo. It is a generated intersection,
 labeled SYNTHETIC DEMO everywhere, so no real place or real crash is shown."
-Click **Start guided demo**.
+Click **Start guided demo**, the amber button in the hero, above the uploader.
 
 **0:20 — Analysis (50 s).**
 Point at the amber source banner. "The footage and tracks are scripted. Only
@@ -112,7 +114,10 @@ with YOLO and ByteTrack."
 
 ## Reproduce
 
-1. `.venv/bin/python -m pytest -q` → 169 passed in the final run. The demo
+1. `.venv/bin/python -m pytest -q` → 170 passed in the final run (after
+   merging `origin/main`). Browser checks at desktop 1280 px and mobile
+   390 px were done by the host session. Commits and pushes were also made by
+   the host session. The demo
    flow is covered end to end in `tests/test_app_demo_flow.py` (Streamlit
    AppTest with a temporary cache and database).
 2. `.venv/bin/python -m streamlit run app.py`, then **Start guided demo**.

@@ -6,7 +6,7 @@ Make the existing NearMiss prototype easier to understand and demonstrate: a jud
 
 Production detector accuracy, deployment, emergency integration, and real-world safety reductions are outside this build. Synthetic examples must remain labeled in the interface and exports. Preserve original-video analysis.
 
-## Proposed implementation bundle
+## Implementation bundle
 
 1. A one-click synthetic intersection demonstration, using generated footage and deterministic track observations. Reuse the existing prediction, independent incident detector, rendering, review and simulated dispatch workflow; bypass only YOLO inference for this explicitly synthetic input. Offer a return to real footage. A visible source banner must distinguish the demonstration everywhere.
 2. A Street Lab page: explain which candidate interaction patterns warrant human review, let the operator explore crossing-distance assumptions and draft a local improvement checklist, and export a concise community review brief. Calculated crossing time is an illustration under user-supplied assumptions, not measured crash reduction or an engineering recommendation.
@@ -22,11 +22,11 @@ Production detector accuracy, deployment, emergency integration, and real-world 
 - Street Lab responds to inputs, states assumptions and exports matching content.
 - Existing tests and targeted new regressions pass.
 - Browser checks cover desktop and a narrow viewport; screenshots and direct interaction establish that the new UI is usable.
-- No remote push, public deployment, external messages or competition submission.
+- Commits and pushes to GitHub main are explicitly authorized by the user. No public deployment, external messages or competition submission.
 
 ## Model route
 
-User requested Opus 5.5 using Codex on Crack. Readiness found both installed official Claude Code clients signed out. No substitute model was dispatched. Route choice is pending with the user; Codex owns the brief and host validation.
+User requested Opus 5.5 using Codex on Crack. After the user signed in, the official Claude Code subscription route ran exact `claude-opus-5-5` implementation workers for the integrated workflow, Library, Investigation, and Explain & Share. Codex performed integration acceptance, browser checks and Git publication. No model or provider fallback was used.
 
 ## Judging reference
 

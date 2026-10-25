@@ -173,11 +173,14 @@ Nested evidence is preserved in CSV/JSON exports.
 ## Tests
 
 ```bash
-pytest -q
+.venv/bin/python -m pytest -q
 ```
 
-Latest verified local result (2026-10-25): **157 passed** (including Streamlit
-AppTest walk-throughs of the guided demo). The earlier 2026-10-24 baseline was 35. A fresh end-to-end
+Latest verified local result (2026-10-25, after merging `origin/main`):
+**170 passed** (including Streamlit AppTest walk-throughs of the guided demo,
+Library, Investigation and the photo landing page). Browser checks at desktop
+1280 px and mobile 390 px were performed by the host session, not by the test
+suite. The earlier 2026-10-24 baseline was 35. A fresh end-to-end
 run of `01_Accident_001.mp4` at confidence 0.31 processed 224 frames into 504
 track observations, returned one HIGH prediction at 1.033 seconds, and returned
 one independently detected suspected collision at 1.200 seconds. The suspected
@@ -206,6 +209,12 @@ audit trail.
 ## Demonstration
 
 ### Guided synthetic demo (no footage or model needed)
+
+The Overview landing page is a full-bleed photograph (`static/nearmiss-hero.jpg`,
+labeled as illustrative context, not analyzed footage) with the headline "See
+the moments before impact.", a **Start guided demo** button, the MP4 uploader,
+and "How a warning is earned". Once footage or the demo is active, every page,
+including Overview, uses the dark interface so evidence tables stay legible.
 
 Select **Start guided demo** on Overview. NearMiss generates a short, clearly
 illustrative top-down intersection clip and deterministic scripted track rows
@@ -238,6 +247,8 @@ guided demo.
   not a crash reduction), builds a follow-up observation checklist, and exports
   a matching community review brief (PDF/Markdown).
 - **Investigation** steps through original frames with stored track rows.
+  **Jump to evidence** opens the warning's first alert and selects its
+  participants.
 - **Explain & Share** explains one flagged moment and exports a Markdown brief.
 - **Library** saves footage-free run snapshots and compares them.
 

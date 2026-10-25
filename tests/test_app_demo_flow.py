@@ -254,3 +254,26 @@ def test_jump_to_evidence_selects_its_participants_over_unrelated_tracks(isolate
     shown = at.dataframe[-1].value
     assert "ID" in shown.columns
     assert label.split("·")[1].split()[-1] in set(shown["ID"])
+
+
+def page_html(at: AppTest) -> str:
+    return "\n".join(str(element.value) for element in at.markdown)
+
+
+def test_photo_landing_keeps_demo_upload_and_explainer_then_drops_photo(isolated):
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.run()
+    assert not at.exception, at.exception
+    html = page_html(at)
+    assert "See the moments" in html and "before impact." in html
+    assert "background-attachment:fixed" in html  # collaborator's full-photo shell
+    assert "illustrative context only" in html
+    assert "How a warning is earned" in html
+    assert at.button(key="start_demo").proto.type == "primary"
+    assert len(at.get("file_uploader")) == 1
+
+    at.button(key="start_demo").click().run()
+    go(at, "Overview")
+    # With footage active the evidence tables stay on the dark interface.
+    assert "background-attachment:fixed" not in page_html(at)
+    assert "SYNTHETIC DEMO" in text_of(at)

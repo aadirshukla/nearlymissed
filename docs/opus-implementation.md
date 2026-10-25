@@ -1,9 +1,11 @@
 # Opus implementation report: NearMiss challenge bundle
 
-Branch `codex/congressional-demo`. Nothing was committed, pushed, deployed, or
-sent. All work is inside this repository. One exception, now reverted: a
-scratch tuning script was briefly written to `/tmp/nmdemo/` and then moved into
-the gitignored `.pytest_cache/` and deleted.
+Branch `codex/congressional-demo`, merged with `origin/main`. The user
+authorized commits and pushes, including pushing to main. The **host session**
+made every Git commit, merge commit and push. This worker made none of them,
+and nothing was deployed or sent to an external service. Early on, a scratch
+tuning script was briefly written to `/tmp/nmdemo/`. It was moved into the
+gitignored `.pytest_cache/` and deleted.
 
 ## Files
 
@@ -41,6 +43,36 @@ edited in the final acceptance pass (below), after their author finished.
 Overview, Analysis, Investigation, Incidents, Explain & Share, Dispatch,
 Street Lab, Library. The guided steps cover the five core ones (Overview →
 Analysis → Incidents → Dispatch → Street Lab).
+
+## Merge with collaborator commit f2bfe01 ("sleek background")
+
+`git merge --no-ff --no-commit origin/main` produced seven conflict hunks in
+`app.py`. Each was resolved by combining both sides:
+
+- **Kept from the collaborator:** the full-photo Overview shell
+  (`apply_overview_shell`, `static/nearmiss-hero.jpg`), the "See the moments /
+  before impact." hero, its uploader styling and proof line, the translucent
+  sidebar and collapsed-control styling, and the hidden Streamlit
+  Deploy/menu.
+- **Kept from this branch:** the guided demo, the source banners, all eight
+  pages, explanations, and "How a warning is earned".
+- **Combined landing page.** The hero now holds a primary **Start guided
+  demo** button, the uploader, and an "illustrative context only, not analyzed
+  footage" credit. The explainer sits below the hero on an opaque dark panel.
+  The photo shell is applied only on the Overview landing state, with no
+  footage. Once the demo or an upload is active, Overview and every other page
+  use the dark interface, so tables never sit on the photograph.
+- **Replaced:** the earlier inline SVG illustration and its pulse animation
+  were dropped in favor of the collaborator's photograph.
+- **Sidebar:** `initial_sidebar_state="auto"` was kept instead of the
+  collaborator's `"collapsed"`. Navigation stays discoverable for eight pages
+  on desktop, it is collapsed on narrow screens, and it can always be opened.
+  The ≥ 901 px expanded-only width rule replaces the collaborator's
+  unconditional fixed width, which caused the earlier narrow-screen overlap.
+- **Multiselect chips.** Selected multiselect chips were white text on white
+  (the light theme primary). New CSS on `[data-baseweb="tag"]` / `span[data-tag]`
+  gives a dark chip, light label and removal icon, an amber icon on hover, and
+  an amber focus outline. It uses no generated Streamlit class names.
 
 ## Final acceptance pass
 
@@ -129,20 +161,21 @@ One consolidated correction pass, each with targeted regressions:
   idea is a review hypothesis requiring field measurement. Locations are camera
   frame regions, never addresses. The Markdown and PDF exports render from one
   `build_brief` dict.
-- **UI.** Warm amber signal accent on the existing dark theme, an inline SVG
-  intersection hero (labeled "Illustration only"), and rules rather than cards.
-  Amber `:focus-visible` outlines on buttons, tabs, inputs, sliders, checkboxes
-  and sidebar items. The pulse animation runs only under
-  `prefers-reduced-motion: no-preference`, with a global reduced-motion
-  override. The sidebar width is forced only at ≥ 901px while expanded, and
+- **UI.** Warm amber signal accent on the dark theme; the collaborator's
+  photograph is the landing hero (see merge section), and rules rather than
+  cards elsewhere. Amber `:focus-visible` outlines on buttons, tabs, inputs,
+  sliders, checkboxes, chips and sidebar items. A global
+  `prefers-reduced-motion: reduce` override shortens transitions and
+  animations. The sidebar width is forced only at ≥ 901px while expanded, and
   `initial_sidebar_state="auto"`, so the narrow-screen overlay no longer covers
   content.
 
 ## Tests actually run
 
-- `.venv/bin/python -m pytest -q` → **169 passed** (final run after the
-  acceptance pass; 158 before it, plus 11 new regressions). Per file:
-  app_demo_flow 7, challenge_regressions 15, conflict_detector 11, contract 9,
+- `.venv/bin/python -m pytest -q` → **170 passed** (final run, after the
+  merge with `origin/main`). That is 158 before the acceptance pass, plus 11
+  acceptance regressions, plus 1 landing-page test. `git diff --check` is
+  clean. Per file: app_demo_flow 8, challenge_regressions 15, conflict_detector 11, contract 9,
   demo_streetlab 13, evidence_brief 44, history 32, incident_workflow 7,
   investigation 23, safety_analysis 8.
 - My Streamlit AppTest flows (temporary cache and DB via monkeypatch):
@@ -158,21 +191,32 @@ One consolidated correction pass, each with targeted regressions:
     offers it again after Analysis recomputes;
   - Investigation **Go** from an unrelated track/type selection selects the
     evidence participants and shows that record in the evidence table. A
-    mutation check showed this test fails without the fix.
-- I visually inspected generated demo frames and annotated/incident frames
-  (PNG renders, now deleted).
-- `curl 127.0.0.1:8511/_stcore/health` → `ok` (the host preview was left
-  running).
+    mutation check showed this test fails without the fix;
+  - the merged photo landing has the collaborator headline, the full-photo
+    shell, the illustrative credit, a primary **Start guided demo**, the
+    uploader and the explainer. After the demo starts, Overview no longer
+    applies the photo shell.
+- Earlier in the build I inspected generated demo frames (PNG renders, since
+  deleted). I did no browser QA. The host session checked the browser at
+  desktop 1280 px and mobile 390 px: landing, the guided demo through Street
+  Lab, Library save, Investigation jump (frame 56 / 2.8 s, tracks 1 and 2,
+  warning visible) and evidence-brief download. The host will recheck the
+  merged landing and the chip contrast.
 
 ## Known limitations
 
 - During the acceptance pass a scratch copy of `investigation_ui.py` was
   written to `/tmp/iu.bak` by mistake. It was deleted right away and never
   read back.
-- No browser visual QA on my side. The SVG hero, focus rings, narrow-screen
-  sidebar behavior and the amber primary-button text need host checks at
-  desktop and narrow widths. The sidebar CSS relies on Streamlit's
-  `aria-expanded` attribute.
+- I did no browser visual QA. These need the host's browser to accept them:
+  the merged photo landing at 1280 and 390 px, the chip contrast, the
+  translucent sidebar over the photograph, and the amber primary button on
+  the photograph. The CSS relies on Streamlit/BaseWeb DOM attributes
+  (`aria-expanded`, `data-baseweb="tag"`, `data-testid`), which can change
+  between Streamlit releases.
+- The photo shell is applied on the run that shows the landing page. On the
+  single run where an upload is accepted, the preview appears under the hero
+  until the next interaction switches to the dark layout.
 - The same-lane branch can add new warnings on real footage with slowing
   queues. It is regression-tested on synthetic tracks only. The README's
   earlier real-clip result (`01_Accident_001.mp4`) was not re-run because no

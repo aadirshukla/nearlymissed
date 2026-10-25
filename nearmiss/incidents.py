@@ -209,11 +209,17 @@ def _prediction_for_pair(
         if not pair_matches:
             continue
         warning_time = _number(
-            event.get("first_alert_timestamp_seconds", event.get("timestamp_seconds")), -1.0
+            event.get("first_alert_timestamp_seconds", event.get("timestamp_seconds")),
+            float("nan"),
         )
+        if not isfinite(warning_time):
+            continue
+        # Only a warning raised strictly before first contact is a prediction.
+        # A warning at or after contact would have a zero/negative lead and
+        # must not be presented as "predicted earlier".
         gap = impact_time - warning_time
-        if -0.25 <= gap <= maximum_gap:
-            matches.append((abs(gap), event))
+        if 0.0 < gap <= maximum_gap:
+            matches.append((gap, event))
     return min(matches, key=lambda item: item[0])[1] if matches else None
 
 
@@ -451,9 +457,12 @@ def detect_suspected_collisions(
                 if prediction
                 else None
             )
+            # The timestamp, frame and boxes describe first contact, so the
+            # drawn contact marker must come from that same frame. The peak
+            # overlap location is kept separately as supporting evidence.
             contact_point = [
-                round(float(peak["intersection_center_x"]), 2),
-                round(float(peak["intersection_center_y"]), 2),
+                round(float(impact["intersection_center_x"]), 2),
+                round(float(impact["intersection_center_y"]), 2),
             ]
             incident_id = _incident_identifier(source_video_id, pair, impact_time)
             candidates.append(
@@ -493,6 +502,17 @@ def detect_suspected_collisions(
                         "intersection_area_pixels": round(
                             float(peak["intersection_area_pixels"]), 2
                         ),
+                        "first_contact_overlap_fraction_smaller_box": round(
+                            float(impact["overlap_fraction_smaller_box"]), 3
+                        ),
+                        "peak_overlap_frame_index": int(peak["frame_index"]),
+                        "peak_overlap_timestamp_seconds": round(
+                            float(peak["timestamp_seconds"]), 3
+                        ),
+                        "peak_contact_point": [
+                            round(float(peak["intersection_center_x"]), 2),
+                            round(float(peak["intersection_center_y"]), 2),
+                        ],
                         **convergence,
                         "motion_response": response,
                     },
@@ -532,6 +552,17 @@ def detect_suspected_collisions(
                 "first_suspected_impact_timestamp_seconds"
             ]
             strongest["frame_index"] = previous["frame_index"]
+            # Keep frame-specific evidence aligned with the preserved first
+            # suspected-impact frame and its prediction lead.
+            for key in (
+                "vehicle_a_bbox",
+                "vehicle_b_bbox",
+                "contact_point",
+                "associated_prediction_event_id",
+                "prediction_warning_timestamp_seconds",
+                "prediction_lead_seconds",
+            ):
+                strongest[key] = previous[key]
             merged[-1] = strongest
         merged[-1]["end_frame_index"] = max(
             merged[-1]["end_frame_index"], candidate["end_frame_index"]

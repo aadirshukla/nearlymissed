@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from io import BytesIO
 from math import isfinite
 from typing import Any
@@ -33,6 +35,17 @@ def _measurement(value: Any) -> str:
     return "—" if number is None else f"{number:.3f}s"
 
 
+def report_cache_key(inputs: dict[str, Any]) -> str:
+    """Fingerprint every input that changes report content.
+
+    A report cached only by video hash goes stale when thresholds, the analysis
+    zone, review labels, or provenance change; callers pass all of them here.
+    """
+
+    encoded = json.dumps(inputs, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
 def generate_safety_report(
     *,
     source_filename: str,
@@ -42,6 +55,7 @@ def generate_safety_report(
     heatmap_rgb,
     review_labels: dict[str, str] | None = None,
     event_frames: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> bytes:
     """Build a PDF using only the supplied processed tracks/events and frames."""
 
@@ -76,7 +90,8 @@ def generate_safety_report(
         leftMargin=0.55 * inch,
         topMargin=0.55 * inch,
         bottomMargin=0.55 * inch,
-        title="NearMiss Intersection Safety Report",
+        title="NearMiss Intersection Safety Report"
+        + (" (SYNTHETIC DEMO)" if (provenance or {}).get("data_source") == "synthetic_demo" else ""),
         author="NearMiss",
     )
     styles = getSampleStyleSheet()
@@ -110,8 +125,25 @@ def generate_safety_report(
             textColor=colors.HexColor("#475569"),
         )
     )
-    story = [
-        Paragraph("NearMiss Intersection Safety Report", styles["NearMissTitle"]),
+    story = [Paragraph("NearMiss Intersection Safety Report", styles["NearMissTitle"])]
+    if provenance:
+        is_synthetic = provenance.get("data_source") == "synthetic_demo"
+        story.append(
+            Paragraph(
+                ("<b>SYNTHETIC DEMO</b> — " if is_synthetic else "<b>Source:</b> ")
+                + escape(str(provenance.get("summary", "")))
+                + " "
+                + escape(str(provenance.get("pipeline_boundary", ""))),
+                ParagraphStyle(
+                    name="Provenance",
+                    parent=styles["BodyText"],
+                    backColor=colors.HexColor("#F2A93B" if is_synthetic else "#e2e8f0"),
+                    borderPadding=6,
+                    spaceAfter=10,
+                ),
+            )
+        )
+    story += [
         Paragraph(f"Source video: {escape(str(source_filename))}", styles["BodyText"]),
         Paragraph(
             "Experimental computer-vision decision support. Detected conflicts are "

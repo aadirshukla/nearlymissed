@@ -212,6 +212,48 @@ def annotate_incident_frame(frame_bgr: np.ndarray, incident: dict) -> np.ndarray
     return frame
 
 
+def transcode_for_browser(raw: Path, output: Path) -> Path:
+    """Re-encode an OpenCV mp4v file as browser-playable H.264, then remove it.
+
+    Falls back to copying the raw file when no ffmpeg binary is available.
+    """
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except (ImportError, RuntimeError, OSError):
+            ffmpeg = None
+    if ffmpeg:
+        command = [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(raw),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-an",
+            str(output),
+        ]
+        completed = subprocess.run(command, check=False, capture_output=True, timeout=600)
+        if completed.returncode != 0:
+            shutil.copyfile(raw, output)
+    else:
+        shutil.copyfile(raw, output)
+    raw.unlink(missing_ok=True)
+    return output
+
+
 def extract_event_clip(
     artifacts: AnalysisArtifacts,
     event_id: str,
@@ -257,43 +299,7 @@ def extract_event_clip(
         capture.release()
         writer.release()
 
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        try:
-            import imageio_ffmpeg
-
-            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        except (ImportError, RuntimeError, OSError):
-            ffmpeg = None
-    if ffmpeg:
-        completed = subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                str(raw),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                "-an",
-                str(output),
-            ],
-            check=False,
-            capture_output=True,
-            timeout=600,
-        )
-        if completed.returncode != 0:
-            shutil.copyfile(raw, output)
-    else:
-        shutil.copyfile(raw, output)
-    raw.unlink(missing_ok=True)
+    transcode_for_browser(raw, output)
     return output
 
 
@@ -832,39 +838,7 @@ def render_annotated_video(
         capture.release()
         writer.release()
 
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        try:
-            import imageio_ffmpeg
-
-            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        except (ImportError, RuntimeError, OSError):
-            ffmpeg = None
-    if ffmpeg:
-        command = [
-            ffmpeg,
-            "-y",
-            "-loglevel",
-            "error",
-            "-i",
-            str(raw_path),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            "-an",
-            str(output_path),
-        ]
-        completed = subprocess.run(command, check=False, capture_output=True, timeout=600)
-        if completed.returncode != 0:
-            shutil.copyfile(raw_path, output_path)
-    else:
-        shutil.copyfile(raw_path, output_path)
-    raw_path.unlink(missing_ok=True)
+    transcode_for_browser(raw_path, output_path)
 
     if progress:
         progress(1.0, "Annotated video ready")
@@ -890,6 +864,9 @@ def tracks_to_csv(tracks: list[dict]) -> bytes:
         "confidence",
         "in_conflict_zone",
     ]
+    if any(isinstance(record, dict) and "data_source" in record for record in tracks):
+        # Provenance travels with every row, e.g. scripted synthetic demo tracks.
+        fieldnames.append("data_source")
     from io import StringIO
 
     stream = StringIO()

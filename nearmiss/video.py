@@ -34,6 +34,44 @@ class VideoError(RuntimeError):
     """Raised when a video cannot be validated or processed."""
 
 
+def cache_summary() -> tuple[int, int]:
+    """Return cached video count and bytes, excluding reusable model settings."""
+
+    if not CACHE_ROOT.exists():
+        return 0, 0
+    video_directories = [
+        path for path in CACHE_ROOT.iterdir() if path.is_dir() and path.name != "ultralytics"
+    ]
+    total_bytes = sum(
+        path.stat().st_size
+        for directory in video_directories
+        for path in directory.rglob("*")
+        if path.is_file()
+    )
+    return len(video_directories), total_bytes
+
+
+def clear_analysis_cache() -> tuple[int, int]:
+    """Remove all cached uploads, tracks, and annotated videos.
+
+    Ultralytics settings/model downloads are preserved so clearing results does
+    not force another model download. Returns removed video count and bytes.
+    """
+
+    video_count, total_bytes = cache_summary()
+    if not CACHE_ROOT.exists():
+        return video_count, total_bytes
+    root = CACHE_ROOT.resolve()
+    for target in CACHE_ROOT.iterdir():
+        if not target.is_dir() or target.name == "ultralytics":
+            continue
+        resolved = target.resolve()
+        if resolved.parent != root:
+            raise VideoError("Refusing to clear a cache path outside the NearMiss cache root.")
+        shutil.rmtree(resolved)
+    return video_count, total_bytes
+
+
 @dataclass(frozen=True)
 class VideoMetadata:
     fps: float
@@ -111,6 +149,107 @@ def inspect_video(path: Path) -> tuple[VideoMetadata, np.ndarray]:
         duration_seconds=frame_count / fps,
     )
     return metadata, frame
+
+
+def frame_at_timestamp(path: Path, timestamp_seconds: float) -> np.ndarray:
+    """Read one actual BGR frame at or immediately after a video timestamp."""
+
+    capture = cv2.VideoCapture(str(path))
+    try:
+        if not capture.isOpened():
+            raise VideoError("OpenCV could not open the source video for evidence review.")
+        capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(timestamp_seconds)) * 1000.0)
+        ok, frame = capture.read()
+    finally:
+        capture.release()
+    if not ok or frame is None:
+        raise VideoError("The requested evidence frame could not be decoded.")
+    return frame
+
+
+def extract_event_clip(
+    artifacts: AnalysisArtifacts,
+    event_id: str,
+    timestamp_seconds: float,
+    before_seconds: float = 2.0,
+    after_seconds: float = 2.0,
+) -> Path:
+    """Create a cached source-footage excerpt around a detector alert."""
+
+    start = max(0.0, float(timestamp_seconds) - max(0.0, before_seconds))
+    end = min(
+        artifacts.metadata.duration_seconds,
+        float(timestamp_seconds) + max(0.0, after_seconds),
+    )
+    safe_id = "".join(character for character in str(event_id) if character.isalnum() or character in "-_")
+    digest = hashlib.sha256(f"{safe_id}:{start:.3f}:{end:.3f}".encode()).hexdigest()[:10]
+    output = artifacts.cache_dir / f"evidence_{safe_id}_{digest}.mp4"
+    if output.exists() and output.stat().st_size > 0:
+        return output
+
+    raw = artifacts.cache_dir / f"evidence_{safe_id}_{digest}_raw.mp4"
+    capture = cv2.VideoCapture(str(artifacts.source_path))
+    capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
+    writer = cv2.VideoWriter(
+        str(raw),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        artifacts.metadata.fps,
+        (artifacts.metadata.width, artifacts.metadata.height),
+    )
+    if not writer.isOpened():
+        capture.release()
+        raise VideoError("OpenCV could not create the event evidence clip.")
+    try:
+        while True:
+            position = capture.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if position > end:
+                break
+            ok, frame = capture.read()
+            if not ok:
+                break
+            writer.write(frame)
+    finally:
+        capture.release()
+        writer.release()
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except (ImportError, RuntimeError, OSError):
+            ffmpeg = None
+    if ffmpeg:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(raw),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-an",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=600,
+        )
+        if completed.returncode != 0:
+            shutil.copyfile(raw, output)
+    else:
+        shutil.copyfile(raw, output)
+    raw.unlink(missing_ok=True)
+    return output
 
 
 def _analysis_key(video_hash: str, config: TrackingConfig) -> str:
@@ -279,14 +418,18 @@ def load_artifacts(artifacts: AnalysisArtifacts) -> tuple[list[dict], VideoMetad
 
 
 def _render_key(
-    zone: list[list[float]], trail_length: int, events: list[dict] | None = None
+    zone: list[list[float]],
+    trail_length: int,
+    events: list[dict] | None = None,
+    incidents: list[dict] | None = None,
 ) -> str:
     encoded = json.dumps(
         {
-            "renderer_version": 6,
+            "renderer_version": 10,
             "zone": zone,
             "trail_length": trail_length,
             "events": events or [],
+            "incidents": incidents or [],
         },
         sort_keys=True,
         default=str,
@@ -301,11 +444,13 @@ def render_annotated_video(
     trail_length: int = 30,
     progress: Callable[[float, str], None] | None = None,
     events: list[dict] | None = None,
+    incidents: list[dict] | None = None,
 ) -> Path:
-    """Draw tracks, predicted conflict paths, evidence labels, and the zone."""
+    """Draw tracks, predictions, suspected incidents, and the selected zone."""
 
     events = events or []
-    render_key = _render_key(zone, trail_length, events)
+    incidents = incidents or []
+    render_key = _render_key(zone, trail_length, events, incidents)
     output_path = artifacts.cache_dir / f"annotated_{render_key}.mp4"
     if output_path.exists() and output_path.stat().st_size > 0:
         if progress:
@@ -349,13 +494,16 @@ def render_annotated_video(
                 cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
                 cv2.polylines(frame, [zone_array], True, (248, 189, 56), 2)
 
+            frame_records = by_frame.get(frame_index, [])
+            visible_track_ids = {int(record["track_id"]) for record in frame_records}
+
             active_events: list[dict] = []
             for event in events:
                 event_frame = int(event.get("frame_index", 0))
                 start_frame = int(event.get("start_frame_index", event_frame))
                 end_frame = int(event.get("end_frame_index", event_frame))
                 padding = max(1, int(round(0.35 * artifacts.metadata.fps)))
-                if start_frame - padding <= frame_index <= end_frame + padding:
+                if start_frame <= frame_index <= end_frame + padding:
                     active_events.append(event)
 
             active_events.sort(
@@ -367,21 +515,33 @@ def render_annotated_video(
                 ),
                 reverse=True,
             )
+            hidden_active_count = max(0, len(active_events) - 3)
+            active_events = active_events[:3]
             highlighted_ids: dict[int, dict] = {}
             for event_number, event in enumerate(active_events):
                 severity = str(event.get("severity", "LOW")).upper()
                 color = severity_colors.get(severity, severity_colors["LOW"])
                 first_start = event.get("participant_a_position") or event.get("vehicle_position")
-                first_end = event.get("participant_a_predicted_end") or event.get("vehicle_predicted_end")
+                first_end = (
+                    event.get("participant_a_conflict_position")
+                    or event.get("participant_a_predicted_end")
+                    or event.get("vehicle_predicted_end")
+                )
                 second_start = event.get("participant_b_position") or event.get("pedestrian_position")
-                second_end = event.get("participant_b_predicted_end") or event.get("pedestrian_predicted_end")
+                second_end = (
+                    event.get("participant_b_conflict_position")
+                    or event.get("participant_b_predicted_end")
+                    or event.get("pedestrian_predicted_end")
+                )
                 conflict_point = event.get("conflict_point")
+                first_path_color = (255, 210, 80)
+                second_path_color = (210, 90, 255)
                 if first_start and first_end:
                     cv2.arrowedLine(
                         frame,
                         tuple(int(value) for value in first_start),
                         tuple(int(value) for value in first_end),
-                        color,
+                        first_path_color,
                         3,
                         cv2.LINE_AA,
                         tipLength=0.08,
@@ -391,13 +551,17 @@ def render_annotated_video(
                         frame,
                         tuple(int(value) for value in second_start),
                         tuple(int(value) for value in second_end),
-                        color,
+                        second_path_color,
                         3,
                         cv2.LINE_AA,
                         tipLength=0.08,
                     )
                 if conflict_point:
                     point = tuple(int(value) for value in conflict_point)
+                    region_radius = int(
+                        min(60, max(8, float(event.get("conflict_region_radius_pixels", 12.0))))
+                    )
+                    cv2.circle(frame, point, region_radius, color, 2, cv2.LINE_AA)
                     cv2.drawMarker(
                         frame,
                         point,
@@ -416,18 +580,48 @@ def render_annotated_video(
                     if track_id is not None:
                         highlighted_ids.setdefault(int(track_id), event)
 
-                if event_number < 4:
+                # If ByteTrack misses one alert participant briefly, retain a
+                # clearly labelled last-known box instead of making the second
+                # vehicle disappear from the warning.
+                for track_id, bbox, box_color in (
+                    (
+                        event.get("participant_a_track_id"),
+                        event.get("participant_a_bbox"),
+                        first_path_color,
+                    ),
+                    (
+                        event.get("participant_b_track_id"),
+                        event.get("participant_b_bbox"),
+                        second_path_color,
+                    ),
+                ):
+                    if track_id is None or not bbox or int(track_id) in visible_track_ids:
+                        continue
+                    x1, y1, x2, y2 = (int(value) for value in bbox)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                    cv2.putText(
+                        frame,
+                        f"#{int(track_id)}",
+                        (x1, min(artifacts.metadata.height - 6, y2 + 14)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        box_color,
+                        1,
+                        cv2.LINE_AA,
+                    )
+
+                if event_number < 3:
                     banner_y = 30 + 30 * event_number
                     first_type = str(event.get("participant_a_type", "vehicle"))[:1].upper()
                     second_type = str(event.get("participant_b_type", "pedestrian"))[:1].upper()
                     first_id = event.get("participant_a_track_id", event.get("vehicle_track_id", "?"))
                     second_id = event.get("participant_b_track_id", event.get("pedestrian_track_id", "?"))
                     banner = (
-                        f'{severity}  t={float(event.get("timestamp_seconds", 0.0)):.1f}s  '
+                        f'{severity}  alert={float(event.get("first_alert_timestamp_seconds", 0.0)):.1f}s  '
                         f'{first_type}#{first_id}  '
                         f'{second_type}#{second_id}  '
+                        f'TTC={float(event.get("time_to_conflict_seconds", 0.0)):.2f}s  '
                         f'gap={float(event.get("arrival_time_gap_seconds", 0.0)):.2f}s  '
-                        f'sep={float(event.get("path_separation_pixels", 0.0)):.0f}px'
                     )
                     cv2.putText(
                         frame,
@@ -439,11 +633,11 @@ def render_annotated_video(
                         2,
                         cv2.LINE_AA,
                     )
-            if len(active_events) > 4:
+            if hidden_active_count:
                 cv2.putText(
                     frame,
-                    f"+{len(active_events) - 4} additional concurrent flags",
-                    (16, 150),
+                    f"+{hidden_active_count} lower-ranked active flags hidden",
+                    (16, 124),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
                     (255, 255, 255),
@@ -451,22 +645,78 @@ def render_annotated_video(
                     cv2.LINE_AA,
                 )
 
-            for record in by_frame.get(frame_index, []):
+            active_incidents: list[dict] = []
+            for incident in incidents:
+                start_frame = int(incident.get("frame_index", 0))
+                end_frame = int(incident.get("end_frame_index", start_frame))
+                padding = max(1, int(round(0.75 * artifacts.metadata.fps)))
+                if start_frame <= frame_index <= end_frame + padding:
+                    active_incidents.append(incident)
+            active_incidents = sorted(
+                active_incidents,
+                key=lambda item: int(item.get("evidence_signal_count", 0)),
+                reverse=True,
+            )[:2]
+            incident_highlighted_ids: dict[int, dict] = {}
+            for incident_number, incident in enumerate(active_incidents):
+                for key in ("vehicle_a_track_id", "vehicle_b_track_id"):
+                    if incident.get(key) is not None:
+                        incident_highlighted_ids[int(incident[key])] = incident
+                point = incident.get("contact_point")
+                if point:
+                    contact_point = tuple(int(value) for value in point)
+                    cv2.circle(frame, contact_point, 18, (20, 20, 255), 3, cv2.LINE_AA)
+                    cv2.drawMarker(
+                        frame,
+                        contact_point,
+                        (20, 20, 255),
+                        cv2.MARKER_CROSS,
+                        28,
+                        4,
+                    )
+                banner_y = 30 + 30 * (len(active_events) + incident_number)
+                banner = (
+                    f'SUSPECTED COLLISION  V#{incident.get("vehicle_a_track_id", "?")} / '
+                    f'V#{incident.get("vehicle_b_track_id", "?")}  '
+                    f't={float(incident.get("timestamp_seconds", 0.0)):.2f}s  '
+                    f'evidence={int(incident.get("evidence_signal_count", 0))}'
+                )
+                cv2.putText(
+                    frame,
+                    banner,
+                    (16, banner_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.62,
+                    (20, 20, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+            for record in frame_records:
                 track_id = int(record["track_id"])
                 x1, y1, x2, y2 = (int(value) for value in record["bbox"])
                 center = (int((x1 + x2) / 2), y2)
                 is_person = record["object_type"] == "pedestrian"
-                color = (191, 212, 45) if is_person else (60, 146, 251)
+                if active_events or active_incidents:
+                    color = (82, 91, 108)
+                else:
+                    color = (191, 212, 45) if is_person else (60, 146, 251)
                 highlighted_event = highlighted_ids.get(track_id)
-                thickness = 2
+                highlighted_incident = incident_highlighted_ids.get(track_id)
+                thickness = 1 if active_events or active_incidents else 2
                 if highlighted_event:
                     severity = str(highlighted_event.get("severity", "LOW")).upper()
                     color = severity_colors.get(severity, severity_colors["LOW"])
                     thickness = 4
+                if highlighted_incident:
+                    color = (20, 20, 255)
+                    thickness = 4
                 trails[track_id].append(center)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
                 suffix = (
-                    f'  {str(highlighted_event.get("severity")).upper()}'
+                    "  SUSPECTED"
+                    if highlighted_incident
+                    else f'  {str(highlighted_event.get("severity")).upper()}'
                     if highlighted_event
                     else ""
                 )
@@ -484,11 +734,11 @@ def render_annotated_video(
                 )
                 points = np.asarray(trails[track_id], dtype=np.int32)
                 if len(points) >= 2:
-                    cv2.polylines(frame, [points], False, color, 2)
+                    cv2.polylines(frame, [points], False, color, 2 if highlighted_event else 1)
 
             cv2.putText(
                 frame,
-                "POTENTIAL CONFLICT ANALYSIS - NOT ACCIDENT VERIFICATION",
+                "PREDICTION / SUSPECTED INCIDENT - HUMAN REVIEW REQUIRED",
                 (16, artifacts.metadata.height - 18),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,

@@ -8,7 +8,14 @@ import pyarrow as pa
 from conflict_detector import detect_conflicts
 from nearmiss.events import events_to_csv, format_timestamp, normalize_events
 from nearmiss.geometry import enrich_tracks_with_zone, point_in_polygon
-from nearmiss.video import tracks_to_csv, validate_upload, video_digest
+import nearmiss.video as video_module
+from nearmiss.video import (
+    cache_summary,
+    clear_analysis_cache,
+    tracks_to_csv,
+    validate_upload,
+    video_digest,
+)
 
 
 SAMPLE_TRACK = {
@@ -87,4 +94,19 @@ def test_event_csv_preserves_measurements_and_nested_evidence():
     assert "arrival_time_gap_seconds" in text
     assert "conflict-001" in text
     assert 'path_separation_pixels' in text
+
+
+def test_clear_analysis_cache_removes_videos_but_preserves_ultralytics(tmp_path, monkeypatch):
+    monkeypatch.setattr(video_module, "CACHE_ROOT", tmp_path)
+    result_file = tmp_path / ("a" * 64) / "analysis" / "annotated_test.mp4"
+    result_file.parent.mkdir(parents=True)
+    result_file.write_bytes(b"video")
+    settings_file = tmp_path / "ultralytics" / "settings.json"
+    settings_file.parent.mkdir()
+    settings_file.write_text("{}", encoding="utf-8")
+
+    assert cache_summary() == (1, 5)
+    assert clear_analysis_cache() == (1, 5)
+    assert not result_file.exists()
+    assert settings_file.exists()
 

@@ -6,6 +6,7 @@ import csv
 import json
 from dataclasses import asdict, is_dataclass
 from io import StringIO
+from math import isfinite
 from typing import Any
 
 
@@ -58,7 +59,13 @@ def format_timestamp(seconds: float | None) -> str:
 
     if seconds is None:
         return "—"
-    minutes, remaining = divmod(max(0.0, float(seconds)), 60)
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return "—"
+    if not isfinite(value):
+        return "—"
+    minutes, remaining = divmod(max(0.0, value), 60)
     return f"{int(minutes):02d}:{remaining:04.1f}"
 
 
@@ -83,6 +90,8 @@ def events_to_csv(events: list[dict]) -> bytes:
         "vehicle_track_id",
         "pedestrian_track_id",
         "arrival_time_gap_seconds",
+        "time_to_conflict_seconds",
+        "persistence_frames",
         "participant_a_eta_seconds",
         "participant_b_eta_seconds",
         "vehicle_eta_seconds",

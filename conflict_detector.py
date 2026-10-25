@@ -31,6 +31,7 @@ class Observation:
     timestamp: float
     position: np.ndarray
     bbox: list[float]
+    confidence: float
 
 
 @dataclass
@@ -55,6 +56,9 @@ class MotionState:
     position: np.ndarray
     velocity: np.ndarray
     bbox: list[float]
+    observation_count: int
+    mean_confidence: float
+    velocity_samples: int
 
     @property
     def speed(self) -> float:
@@ -125,24 +129,67 @@ def _normalize_tracks(tracks: list[dict]) -> list[Observation]:
                 timestamp=timestamp,
                 position=position,
                 bbox=normalized_bbox,
+                confidence=float(record.get("confidence", 0.0) or 0.0),
             )
         )
     return sorted(observations, key=lambda item: (item.timestamp, item.frame_index, item.track_id))
 
 
-def _estimate_velocity(observations: list[Observation], smoothing_frames: int) -> np.ndarray:
-    """Fit x(t) and y(t) slopes over recent points to smooth detector jitter."""
+def _velocity_segments(observations: list[Observation], smoothing_frames: int) -> list[np.ndarray]:
+    """Return recent timestamp-based velocities after rejecting jitter jumps."""
 
-    recent = observations[-max(2, smoothing_frames) :]
-    if len(recent) < 2:
+    recent = observations[-max(3, smoothing_frames) :]
+    segments: list[np.ndarray] = []
+    for previous, current in zip(recent, recent[1:]):
+        elapsed = current.timestamp - previous.timestamp
+        if elapsed <= EPSILON:
+            continue
+        velocity = (current.position - previous.position) / elapsed
+        if np.all(np.isfinite(velocity)):
+            segments.append(velocity)
+    if len(segments) <= 2:
+        return segments
+    values = np.asarray(segments, dtype=float)
+    median = np.median(values, axis=0)
+    deviations = np.linalg.norm(values - median, axis=1)
+    limit = max(35.0, 3.5 * float(np.median(deviations)))
+    filtered = [value for value, deviation in zip(values, deviations) if deviation <= limit]
+    return filtered or [median]
+
+
+def _estimate_velocity(observations: list[Observation], smoothing_frames: int) -> np.ndarray:
+    """Compute a recency-weighted rolling velocity from robust segments."""
+
+    segments = _velocity_segments(observations, smoothing_frames)
+    if not segments:
         return np.zeros(2, dtype=float)
-    times = np.asarray([item.timestamp for item in recent], dtype=float)
-    positions = np.asarray([item.position for item in recent], dtype=float)
-    centered_times = times - float(np.mean(times))
-    denominator = float(np.dot(centered_times, centered_times))
-    if denominator <= EPSILON:
-        return np.zeros(2, dtype=float)
-    return np.sum(centered_times[:, None] * positions, axis=0) / denominator
+    values = np.asarray(segments, dtype=float)
+    weights = np.arange(1, len(values) + 1, dtype=float)
+    return np.average(values, axis=0, weights=weights)
+
+
+def _smoothed_position(
+    observations: list[Observation], velocity: np.ndarray, smoothing_frames: int
+) -> np.ndarray:
+    recent = observations[-max(3, smoothing_frames) :]
+    latest_time = recent[-1].timestamp
+    projected = [
+        item.position + velocity * (latest_time - item.timestamp) for item in recent
+    ]
+    return np.median(np.asarray(projected, dtype=float), axis=0)
+
+
+def _vehicle_family(class_name: str) -> str:
+    if class_name in {"truck", "bus"}:
+        return "heavy"
+    if class_name == "motorcycle":
+        return "motorcycle"
+    return "car"
+
+
+def _dominant_family(observations: list[Observation]) -> str:
+    families = [_vehicle_family(item.class_name) for item in observations]
+    return max(set(families), key=families.count)
 
 
 def _raw_tracklets(observations: list[Observation]) -> list[LogicalTrack]:
@@ -168,6 +215,7 @@ def _stitch_tracklets(tracklets: list[LogicalTrack], config: dict) -> list[Logic
 
     max_gap = max(0.0, _setting(config, "id_stitch_gap_seconds", 0.50))
     max_distance = max(0.0, _setting(config, "id_stitch_distance_pixels", 60.0))
+    max_box_ratio = max(0.25, _setting(config, "id_stitch_distance_box_ratio", 1.75))
     smoothing_frames = max(2, int(_setting(config, "velocity_smoothing_frames", 5)))
     logical_tracks: list[LogicalTrack] = []
     for fragment in sorted(tracklets, key=lambda item: item.observations[0].timestamp):
@@ -181,10 +229,31 @@ def _stitch_tracklets(tracklets: list[LogicalTrack], config: dict) -> list[Logic
             gap = first.timestamp - last.timestamp
             if gap <= EPSILON or gap > max_gap:
                 continue
+            if (
+                candidate.object_type == "vehicle"
+                and len(candidate.observations) >= 3
+                and len(fragment.observations) >= 3
+                and _dominant_family(candidate.observations)
+                != _dominant_family(fragment.observations)
+            ):
+                continue
             velocity = _estimate_velocity(candidate.observations, smoothing_frames)
             projected_endpoint = last.position + velocity * gap
             distance = float(np.linalg.norm(first.position - projected_endpoint))
-            if distance <= max_distance and distance < best_distance:
+            last_width = max(1.0, last.bbox[2] - last.bbox[0])
+            first_width = max(1.0, first.bbox[2] - first.bbox[0])
+            allowed_distance = min(max_distance, max_box_ratio * max(last_width, first_width))
+            direction_consistent = True
+            if len(candidate.observations) >= 4 and len(fragment.observations) >= 4:
+                fragment_velocity = _estimate_velocity(fragment.observations, smoothing_frames)
+                first_speed = float(np.linalg.norm(velocity))
+                second_speed = float(np.linalg.norm(fragment_velocity))
+                if first_speed > 5.0 and second_speed > 5.0:
+                    cosine = float(
+                        np.dot(velocity, fragment_velocity) / (first_speed * second_speed)
+                    )
+                    direction_consistent = cosine >= 0.25
+            if direction_consistent and distance <= allowed_distance and distance < best_distance:
                 best_distance = distance
                 best_track = candidate
         if best_track is None:
@@ -283,28 +352,33 @@ def _motion_state(
     timestamp: float,
     config: dict,
 ) -> MotionState | None:
-    min_age = max(2, int(_setting(config, "min_track_age_frames", 5)))
+    min_age = max(3, int(_setting(config, "min_track_age_frames", 6)))
     if len(history) < min_age:
         return None
     latest = history[-1]
     observation_age = timestamp - latest.timestamp
-    max_age = max(0.0, _setting(config, "max_observation_age_seconds", 0.25))
+    max_age = max(0.0, _setting(config, "max_observation_age_seconds", 0.12))
     if observation_age < -EPSILON or observation_age > max_age:
         return None
-    smoothing_frames = max(2, int(_setting(config, "velocity_smoothing_frames", 5)))
+    smoothing_frames = max(3, int(_setting(config, "velocity_smoothing_frames", 8)))
     velocity = _estimate_velocity(history, smoothing_frames)
-    position = latest.position + velocity * max(0.0, observation_age)
+    position = _smoothed_position(history, velocity, smoothing_frames)
+    position = position + velocity * max(0.0, observation_age)
+    recent = history[-max(3, smoothing_frames) :]
     return MotionState(
         logical_id=track.logical_id,
         object_type=track.object_type,
         class_name=latest.class_name,
         current_track_id=latest.track_id,
-        source_track_ids=tuple(sorted(track.source_track_ids)),
+        source_track_ids=tuple(sorted({item.track_id for item in history})),
         frame_index=latest.frame_index,
         timestamp=timestamp,
         position=position,
         velocity=velocity,
         bbox=latest.bbox,
+        observation_count=len(history),
+        mean_confidence=float(np.mean([item.confidence for item in recent])),
+        velocity_samples=len(_velocity_segments(history, smoothing_frames)),
     )
 
 
@@ -321,6 +395,13 @@ def _severity(arrival_gap: float, config: dict) -> str | None:
     return None
 
 
+def _vehicle_radius(state: MotionState, config: dict) -> float:
+    width = max(1.0, float(state.bbox[2]) - float(state.bbox[0]))
+    fraction = max(0.05, _setting(config, "vehicle_footprint_width_fraction", 0.20))
+    maximum = max(2.0, _setting(config, "maximum_vehicle_radius_pixels", 24.0))
+    return min(maximum, max(2.0, width * fraction))
+
+
 def _candidate_event(
     first: MotionState,
     second: MotionState,
@@ -328,12 +409,12 @@ def _candidate_event(
     config: dict,
 ) -> dict[str, Any] | None:
     horizon = max(0.1, _setting(config, "prediction_horizon_seconds", 2.0))
-    path_tolerance = max(
+    path_margin = max(
         0.1,
         _setting(
             config,
             "path_intersection_tolerance_pixels",
-            _setting(config, "max_distance_pixels", 35.0),
+            _setting(config, "max_distance_pixels", 8.0),
         ),
     )
     min_closing = max(0.0, _setting(config, "min_closing_speed_pixels_per_second", 2.0))
@@ -369,7 +450,12 @@ def _candidate_event(
         first.position, first_end, second.position, second_end
     )
     first_point, second_point, first_fraction, second_fraction, path_distance = closest
-    if path_distance > path_tolerance:
+    first_radius = _vehicle_radius(first, config)
+    second_radius = _vehicle_radius(second, config)
+    conflict_region_radius = first_radius + second_radius
+    effective_margin = min(path_margin, 0.25 * conflict_region_radius)
+    footprint_overlap = path_distance <= conflict_region_radius
+    if path_distance > conflict_region_radius + effective_margin:
         return None
 
     first_eta = first_fraction * horizon
@@ -387,6 +473,8 @@ def _candidate_event(
     severity = _severity(arrival_gap, config)
     if severity is None:
         return None
+    if not footprint_overlap:
+        severity = "LOW"
 
     low_gap = max(
         _setting(config, "low_time_gap_seconds", 1.75),
@@ -397,7 +485,10 @@ def _candidate_event(
     closing_reference = max(
         _setting(config, "closing_speed_reference_pixels_per_second", 50.0), EPSILON
     )
-    path_component = max(0.0, 1.0 - path_distance / path_tolerance)
+    path_component = max(
+        0.0,
+        1.0 - path_distance / max(conflict_region_radius + effective_margin, EPSILON),
+    )
     timing_component = max(0.0, 1.0 - arrival_gap / low_gap)
     closing_component = min(1.0, max(0.0, closing_speed / closing_reference))
     # An explainable prioritization index, never an accident probability.
@@ -421,8 +512,16 @@ def _candidate_event(
         "conflict_point": [round(float(value), 2) for value in conflict_point],
         "participant_a_position": [round(float(value), 2) for value in first.position],
         "participant_b_position": [round(float(value), 2) for value in second.position],
+        "participant_a_bbox": [round(float(value), 2) for value in first.bbox],
+        "participant_b_bbox": [round(float(value), 2) for value in second.bbox],
         "participant_a_predicted_end": [round(float(value), 2) for value in first_end],
         "participant_b_predicted_end": [round(float(value), 2) for value in second_end],
+        "participant_a_conflict_position": [
+            round(float(value), 2) for value in first_point
+        ],
+        "participant_b_conflict_position": [
+            round(float(value), 2) for value in second_point
+        ],
         "participant_a_velocity_pixels_per_second": [
             round(float(value), 2) for value in first.velocity
         ],
@@ -431,9 +530,19 @@ def _candidate_event(
         ],
         "participant_a_eta_seconds": round(first_eta, 3),
         "participant_b_eta_seconds": round(second_eta, 3),
+        "time_to_conflict_seconds": round((first_eta + second_eta) / 2.0, 3),
         "arrival_time_gap_seconds": round(arrival_gap, 3),
         "path_separation_pixels": round(path_distance, 2),
+        "projected_footprints_overlap": footprint_overlap,
+        "conflict_region_radius_pixels": round(conflict_region_radius, 2),
+        "path_uncertainty_margin_pixels": round(effective_margin, 2),
         "closing_speed_pixels_per_second": round(closing_speed, 2),
+        "participant_a_observations": first.observation_count,
+        "participant_b_observations": second.observation_count,
+        "participant_a_mean_confidence": round(first.mean_confidence, 3),
+        "participant_b_mean_confidence": round(second.mean_confidence, 3),
+        "participant_a_velocity_samples": first.velocity_samples,
+        "participant_b_velocity_samples": second.velocity_samples,
         "inside_conflict_zone": True,
         "zone_is_user_defined": bool(config.get("zone_is_user_defined", True)),
         "prediction_horizon_seconds": horizon,
@@ -454,12 +563,12 @@ def _pair_diagnostic(
     """
 
     horizon = max(0.1, _setting(config, "prediction_horizon_seconds", 2.0))
-    path_tolerance = max(
+    path_margin = max(
         0.1,
         _setting(
             config,
             "path_intersection_tolerance_pixels",
-            _setting(config, "max_distance_pixels", 35.0),
+            _setting(config, "max_distance_pixels", 8.0),
         ),
     )
     min_closing = max(0.0, _setting(config, "min_closing_speed_pixels_per_second", 2.0))
@@ -480,6 +589,11 @@ def _pair_diagnostic(
     first_point, second_point, first_fraction, second_fraction, path_distance = _closest_points_on_paths(
         first.position, first_end, second.position, second_end
     )
+    first_radius = _vehicle_radius(first, config)
+    second_radius = _vehicle_radius(second, config)
+    conflict_region_radius = first_radius + second_radius
+    effective_margin = min(path_margin, 0.25 * conflict_region_radius)
+    footprint_overlap = path_distance <= conflict_region_radius
     first_eta = first_fraction * horizon
     second_eta = second_fraction * horizon
     conflict_point = (first_point + second_point) / 2.0
@@ -491,7 +605,7 @@ def _pair_diagnostic(
         reason = "not_closing"
     elif first_stationary and second_stationary:
         reason = "both_stationary"
-    elif path_distance > path_tolerance:
+    elif path_distance > conflict_region_radius + effective_margin:
         reason = "projected_paths_separated"
     elif (not first_stationary and first_eta < min_future_time) or (
         not second_stationary and second_eta < min_future_time
@@ -501,6 +615,8 @@ def _pair_diagnostic(
         reason = "conflict_point_outside_zone"
     elif _severity(arrival_gap, config) is None:
         reason = "arrival_gap_above_low_threshold"
+    elif not footprint_overlap:
+        reason = "accepted_low_uncertainty_margin_only"
 
     return {
         "frame_index": max(first.frame_index, second.frame_index),
@@ -509,18 +625,28 @@ def _pair_diagnostic(
         "participant_b_track_id": second.current_track_id,
         "participant_a_class": first.class_name,
         "participant_b_class": second.class_name,
+        "participant_a_position": [round(float(value), 2) for value in first.position],
+        "participant_b_position": [round(float(value), 2) for value in second.position],
         "participant_a_velocity_pixels_per_second": [round(float(value), 2) for value in first.velocity],
         "participant_b_velocity_pixels_per_second": [round(float(value), 2) for value in second.velocity],
         "participant_a_speed_pixels_per_second": round(first.speed, 2),
         "participant_b_speed_pixels_per_second": round(second.speed, 2),
-        "projected_paths_overlap": path_distance <= path_tolerance,
+        "participant_a_predicted_position": [round(float(value), 2) for value in first_end],
+        "participant_b_predicted_position": [round(float(value), 2) for value in second_end],
+        "projected_paths_overlap": footprint_overlap,
         "path_separation_pixels": round(path_distance, 2),
+        "conflict_region_radius_pixels": round(conflict_region_radius, 2),
         "participant_a_eta_seconds": round(first_eta, 3),
         "participant_b_eta_seconds": round(second_eta, 3),
         "arrival_time_gap_seconds": round(arrival_gap, 3),
+        "time_to_conflict_seconds": round((first_eta + second_eta) / 2.0, 3),
         "closing_speed_pixels_per_second": round(closing_speed, 2),
         "conflict_point": [round(float(value), 2) for value in conflict_point],
         "inside_conflict_zone": inside_zone,
+        "participant_a_mean_confidence": round(first.mean_confidence, 3),
+        "participant_b_mean_confidence": round(second.mean_confidence, 3),
+        "participant_a_velocity_samples": first.velocity_samples,
+        "participant_b_velocity_samples": second.velocity_samples,
         "rejection_reason": reason,
     }
 
@@ -548,14 +674,14 @@ def diagnose_conflicts(tracks, zone, config) -> list[dict]:
 
     histories: dict[int, list[Observation]] = defaultdict(list)
     rows: list[dict] = []
-    min_age = max(2, int(_setting(config, "min_track_age_frames", 3)))
+    min_age = max(3, int(_setting(config, "min_track_age_frames", 6)))
     for timestamp in sorted(updates):
         for logical_id, observation in updates[timestamp]:
             histories[logical_id].append(observation)
         active_ids = [
             logical_id
             for logical_id, history in histories.items()
-            if history and timestamp - history[-1].timestamp <= max(0.0, _setting(config, "max_observation_age_seconds", 0.25))
+            if history and timestamp - history[-1].timestamp <= max(0.0, _setting(config, "max_observation_age_seconds", 0.12))
         ]
         for first_id, second_id in combinations(sorted(active_ids), 2):
             first_history, second_history = histories[first_id], histories[second_id]
@@ -569,6 +695,16 @@ def diagnose_conflicts(tracks, zone, config) -> list[dict]:
                 "participant_b_class": second_last.class_name,
                 "participant_a_observations": len(first_history),
                 "participant_b_observations": len(second_history),
+                "participant_a_mean_confidence": round(
+                    float(np.mean([item.confidence for item in first_history[-8:]])), 3
+                ),
+                "participant_b_mean_confidence": round(
+                    float(np.mean([item.confidence for item in second_history[-8:]])), 3
+                ),
+                "temporal_confirmation_frames_required": max(
+                    2, int(_setting(config, "high_persistence_frames", 3))
+                ),
+                "_logical_pair": tuple(sorted((first_id, second_id))),
             }
             if len(first_history) < min_age or len(second_history) < min_age:
                 rows.append({**base, "rejection_reason": "insufficient_trajectory_observations"})
@@ -579,10 +715,102 @@ def diagnose_conflicts(tracks, zone, config) -> list[dict]:
                 rows.append({**base, "rejection_reason": "stale_or_invalid_observation"})
                 continue
             rows.append({**base, **_pair_diagnostic(first, second, zone, config)})
+
+    # Explain the final temporal gate as well as the geometric gates. This is
+    # deliberately diagnostic-only: it mirrors the detector policy without
+    # creating or upgrading an event.
+    runs: dict[tuple[int, int], dict[str, int | None]] = defaultdict(
+        lambda: {"low": 0, "medium": 0, "high": 0, "previous_frame": None}
+    )
+    max_frame_gap = max(1, int(_setting(config, "persistence_max_frame_gap", 3)))
+    required = {
+        "LOW": max(1, int(_setting(config, "min_event_persistence_frames", 2))),
+        "MEDIUM": max(2, int(_setting(config, "medium_persistence_frames", 2))),
+        "HIGH": max(2, int(_setting(config, "high_persistence_frames", 3))),
+    }
+    for row in rows:
+        pair = row.pop("_logical_pair", None)
+        if pair is None:
+            continue
+        state = runs[pair]
+        frame = int(row["frame_index"])
+        previous_frame = state["previous_frame"]
+        consecutive = previous_frame is None or 0 < frame - int(previous_frame) <= max_frame_gap
+        accepted_geometry = row.get("rejection_reason") in {
+            "accepted",
+            "accepted_low_uncertainty_margin_only",
+        }
+        if not accepted_geometry or not consecutive:
+            state["low"] = state["medium"] = state["high"] = 0
+        if accepted_geometry:
+            projected_severity = _severity(float(row["arrival_time_gap_seconds"]), config)
+            if row.get("rejection_reason") == "accepted_low_uncertainty_margin_only":
+                projected_severity = "LOW"
+            row["projected_risk_class"] = projected_severity
+            rank = SEVERITY_RANK.get(projected_severity or "", 0)
+            state["low"] = int(state["low"]) + 1
+            state["medium"] = int(state["medium"]) + 1 if rank >= 2 else 0
+            state["high"] = int(state["high"]) + 1 if rank >= 3 else 0
+            observed = int(state[projected_severity.lower()])
+            needed = required[projected_severity]
+            row["temporal_confirmation_frames_observed"] = observed
+            row["temporal_confirmation_frames_required"] = needed
+            row["temporal_confirmation_met"] = observed >= needed
+            if observed < needed:
+                row["rejection_reason"] = "pending_temporal_confirmation"
+        else:
+            row["projected_risk_class"] = None
+            row["temporal_confirmation_frames_observed"] = 0
+            row["temporal_confirmation_met"] = False
+        state["previous_frame"] = frame
     return rows
 
 
-def _best_episode_candidate(group: list[dict]) -> dict:
+def _longest_run(group: list[dict], minimum_rank: int, max_frame_gap: int) -> int:
+    longest = current = 0
+    previous_frame: int | None = None
+    for item in group:
+        frame = int(item["frame_index"])
+        qualifies = SEVERITY_RANK[item["severity"]] >= minimum_rank
+        if qualifies and (previous_frame is None or 0 < frame - previous_frame <= max_frame_gap):
+            current += 1
+        elif qualifies:
+            current = 1
+        else:
+            current = 0
+        longest = max(longest, current)
+        previous_frame = frame
+    return longest
+
+
+def _first_confirmed_candidate(
+    group: list[dict], minimum_rank: int, required: int, max_frame_gap: int
+) -> dict:
+    run: list[dict] = []
+    for item in group:
+        if SEVERITY_RANK[item["severity"]] < minimum_rank:
+            run = []
+            continue
+        if run and not (
+            0 < int(item["frame_index"]) - int(run[-1]["frame_index"]) <= max_frame_gap
+        ):
+            run = []
+        run.append(item)
+        if len(run) >= required:
+            return item
+    return group[-1]
+
+
+def _best_episode_candidate(group: list[dict], config: dict) -> dict:
+    by_frame: dict[int, dict] = {}
+    for item in group:
+        frame = int(item["frame_index"])
+        previous = by_frame.get(frame)
+        if previous is None or (SEVERITY_RANK[item["severity"]], item["risk_score"]) > (
+            SEVERITY_RANK[previous["severity"]], previous["risk_score"]
+        ):
+            by_frame[frame] = item
+    group = sorted(by_frame.values(), key=lambda item: item["timestamp_seconds"])
     best = max(
         group,
         key=lambda item: (
@@ -592,13 +820,42 @@ def _best_episode_candidate(group: list[dict]) -> dict:
         ),
     )
     event = dict(best)
-    event["start_timestamp_seconds"] = group[0]["timestamp_seconds"]
+    event["participant_a_track_ids"] = sorted(
+        {track_id for item in group for track_id in item["participant_a_track_ids"]}
+    )
+    event["participant_b_track_ids"] = sorted(
+        {track_id for item in group for track_id in item["participant_b_track_ids"]}
+    )
+    event["candidate_start_timestamp_seconds"] = group[0]["timestamp_seconds"]
     event["end_timestamp_seconds"] = group[-1]["timestamp_seconds"]
-    event["start_frame_index"] = min(item["frame_index"] for item in group)
     event["end_frame_index"] = max(item["frame_index"] for item in group)
-    # The start is the first time this pair met the heuristic, while the main
-    # timestamp remains the strongest frame selected above.
-    event["first_alert_timestamp_seconds"] = event["start_timestamp_seconds"]
+    event["persistence_frames"] = len(group)
+    max_gap = max(1, int(_setting(config, "persistence_max_frame_gap", 3)))
+    high_required = max(2, int(_setting(config, "high_persistence_frames", 3)))
+    medium_required = max(2, int(_setting(config, "medium_persistence_frames", 2)))
+    high_run = _longest_run(group, SEVERITY_RANK["HIGH"], max_gap)
+    medium_run = _longest_run(group, SEVERITY_RANK["MEDIUM"], max_gap)
+    if high_run >= high_required:
+        event["severity"] = "HIGH"
+        first_alert = _first_confirmed_candidate(
+            group, SEVERITY_RANK["HIGH"], high_required, max_gap
+        )
+    elif medium_run >= medium_required:
+        event["severity"] = "MEDIUM"
+        first_alert = _first_confirmed_candidate(
+            group, SEVERITY_RANK["MEDIUM"], medium_required, max_gap
+        )
+    else:
+        event["severity"] = "LOW"
+        low_required = max(1, int(_setting(config, "min_event_persistence_frames", 2)))
+        first_alert = _first_confirmed_candidate(
+            group, SEVERITY_RANK["LOW"], low_required, max_gap
+        )
+    event["first_alert_timestamp_seconds"] = first_alert["timestamp_seconds"]
+    event["start_timestamp_seconds"] = first_alert["timestamp_seconds"]
+    event["start_frame_index"] = first_alert["frame_index"]
+    event["high_persistence_frames"] = high_run
+    event["medium_or_high_persistence_frames"] = medium_run
     return event
 
 
@@ -606,6 +863,9 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
     """Collapse consecutive candidate frames into one event per pair/episode."""
 
     cooldown = max(0.0, _setting(config, "duplicate_cooldown_seconds", 2.0))
+    episode_gap = max(0.01, _setting(config, "candidate_episode_gap_seconds", 0.20))
+    max_frame_gap = max(1, int(_setting(config, "persistence_max_frame_gap", 3)))
+    minimum_frames = max(1, int(_setting(config, "min_event_persistence_frames", 2)))
     by_pair: dict[tuple[int, int], list[dict]] = defaultdict(list)
     for candidate in candidates:
         by_pair[candidate["_logical_pair"]].append(candidate)
@@ -615,17 +875,86 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
         pair_candidates.sort(key=lambda item: item["timestamp_seconds"])
         group: list[dict] = []
         previous_time: float | None = None
+        previous_frame: int | None = None
         for candidate in pair_candidates:
             timestamp = float(candidate["timestamp_seconds"])
-            if previous_time is not None and timestamp - previous_time > cooldown:
-                episodes.append(_best_episode_candidate(group))
+            frame = int(candidate["frame_index"])
+            if previous_time is not None and (
+                timestamp - previous_time > episode_gap
+                or (previous_frame is not None and frame - previous_frame > max_frame_gap)
+            ):
+                episode = _best_episode_candidate(group, config)
+                if episode["persistence_frames"] >= minimum_frames:
+                    episodes.append(episode)
                 group = []
             group.append(candidate)
             previous_time = timestamp
+            previous_frame = frame
         if group:
-            episodes.append(_best_episode_candidate(group))
+            episode = _best_episode_candidate(group, config)
+            if episode["persistence_frames"] >= minimum_frames:
+                episodes.append(episode)
 
-    episodes.sort(key=lambda item: item["timestamp_seconds"])
+    # A brief detector dropout can split one continuous physical interaction
+    # into two candidate episodes. Merge only already-qualified episodes for
+    # the same logical pair inside the explicit cooldown; this preserves the
+    # temporal-confirmation safeguard while preventing duplicate alerts.
+    episodes.sort(
+        key=lambda item: (item["_logical_pair"], item["first_alert_timestamp_seconds"])
+    )
+    merged_episodes: list[dict] = []
+    for event in episodes:
+        previous = merged_episodes[-1] if merged_episodes else None
+        same_pair = previous is not None and previous["_logical_pair"] == event["_logical_pair"]
+        gap = (
+            float(event["candidate_start_timestamp_seconds"])
+            - float(previous["end_timestamp_seconds"])
+            if same_pair
+            else float("inf")
+        )
+        if not same_pair or gap > cooldown:
+            merged_episodes.append(event)
+            continue
+        strongest = max(
+            (previous, event),
+            key=lambda item: (SEVERITY_RANK[item["severity"]], item["risk_score"]),
+        )
+        merged = dict(strongest)
+        merged["candidate_start_timestamp_seconds"] = min(
+            previous["candidate_start_timestamp_seconds"],
+            event["candidate_start_timestamp_seconds"],
+        )
+        merged["first_alert_timestamp_seconds"] = min(
+            previous["first_alert_timestamp_seconds"], event["first_alert_timestamp_seconds"]
+        )
+        merged["start_timestamp_seconds"] = merged["first_alert_timestamp_seconds"]
+        merged["start_frame_index"] = min(
+            previous["start_frame_index"], event["start_frame_index"]
+        )
+        merged["end_timestamp_seconds"] = max(
+            previous["end_timestamp_seconds"], event["end_timestamp_seconds"]
+        )
+        merged["end_frame_index"] = max(
+            previous["end_frame_index"], event["end_frame_index"]
+        )
+        merged["persistence_frames"] = (
+            int(previous["persistence_frames"]) + int(event["persistence_frames"])
+        )
+        merged["high_persistence_frames"] = max(
+            int(previous["high_persistence_frames"]), int(event["high_persistence_frames"])
+        )
+        merged["medium_or_high_persistence_frames"] = max(
+            int(previous["medium_or_high_persistence_frames"]),
+            int(event["medium_or_high_persistence_frames"]),
+        )
+        for participant in ("a", "b"):
+            key = f"participant_{participant}_track_ids"
+            merged[key] = sorted(set(previous[key]) | set(event[key]))
+        merged_episodes[-1] = merged
+
+    episodes = sorted(
+        merged_episodes, key=lambda item: item["first_alert_timestamp_seconds"]
+    )
     for index, event in enumerate(episodes, start=1):
         event["event_id"] = f"conflict-{index:03d}"
         event.pop("_logical_pair", None)
@@ -638,6 +967,8 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
                 "track_ids",
                 "class",
                 "position",
+                "bbox",
+                "conflict_position",
                 "predicted_end",
                 "velocity_pixels_per_second",
                 "eta_seconds",
@@ -656,6 +987,8 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
                 "track_ids",
                 "class",
                 "position",
+                "bbox",
+                "conflict_position",
                 "predicted_end",
                 "velocity_pixels_per_second",
                 "eta_seconds",
@@ -670,6 +1003,7 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
         )
         event["metrics"] = {
             "arrival_time_gap_seconds": event["arrival_time_gap_seconds"],
+            "time_to_conflict_seconds": event["time_to_conflict_seconds"],
             "participant_a_eta_seconds": event["participant_a_eta_seconds"],
             "participant_b_eta_seconds": event["participant_b_eta_seconds"],
             "path_separation_pixels": event["path_separation_pixels"],
@@ -677,6 +1011,7 @@ def _deduplicate_candidates(candidates: list[dict], config: dict) -> list[dict]:
                 "closing_speed_pixels_per_second"
             ],
             "heuristic_risk_index": event["risk_score"],
+            "persistence_frames": event["persistence_frames"],
         }
     return episodes
 

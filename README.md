@@ -1,27 +1,35 @@
 # NearMiss
 
-NearMiss is a local, CPU-friendly intersection safety analysis prototype. It
+NearMiss is a local, CPU-friendly traffic incident monitoring prototype. It
 uses a pretrained Ultralytics YOLO nano model, ByteTrack identities, OpenCV,
-Streamlit, and Plotly to screen fixed-camera traffic footage for potential
-vehicle-to-vehicle conflicts and preserve reviewable video evidence.
+Streamlit, and Plotly to move through a four-stage operator workflow:
+**Predict → Detect → Verify → Notify**.
 
 > NearMiss produces experimental, image-coordinate conflict indicators. A flag
 > is not a verified crash, near miss, probability, or roadway safety rating.
-> Human review is required.
+> Human review is required. Dispatch alerts are local simulations and are never
+> sent to emergency services or external systems.
 
 ## Product workflow
 
-1. Upload an MP4 and optionally draw a conflict-zone polygon.
-2. Run YOLO and ByteTrack locally to create timestamped track observations.
-3. Review the annotated video, deduplicated conflict timeline, and diagnostics.
-4. Explore a heatmap made only from detected event locations.
-5. Label candidates as confirmed potential conflict, false positive, or uncertain.
-6. Download CSV/JSON evidence, the annotated MP4, or a PDF safety report.
+1. Upload an original MP4 and optionally draw a conflict-zone polygon.
+2. **Predict:** project tracked vehicle trajectories and flag potential conflicts.
+3. **Detect:** independently screen for persistent contact plus impact evidence.
+4. **Verify:** review the source frame and ±2-second clip, then confirm, reject,
+   or leave the incident uncertain.
+5. **Notify:** a confirmed incident creates exactly one local simulated dispatch
+   message that an operator can acknowledge.
+6. Download CSV/JSON evidence, the annotated MP4, or the PDF safety report.
 
 Cars, motorcycles, buses, and trucks participate in vehicle-pair analysis.
 People and bicycles remain visible in the tracking output. The dashboard reports
 actual processed counts; a zero-event result remains zero and is never replaced
 with sample data.
+
+YOLO and ByteTrack are existing open-source detection and tracking technologies.
+NearMiss's custom logic is the timestamp-based trajectory predictor, explainable
+conflict gates, multi-signal suspected-collision detector, evidence association,
+deduplication, operator review workflow, and simulated dispatch audit trail.
 
 ## Install and run
 
@@ -76,6 +84,51 @@ Configurable sidebar thresholds include prediction horizon, HIGH arrival gap,
 maximum qualifying arrival gap, minimum trajectory history, and HIGH temporal
 confirmation frames. Defaults are documented in `nearmiss/config.py`.
 
+### Mathematical trajectory prediction
+
+For bounding-box bottom-center observations `pᵢ` at real video timestamps `tᵢ`,
+NearMiss estimates segment velocity as:
+
+```text
+vᵢ = (pᵢ - pᵢ₋₁) / (tᵢ - tᵢ₋₁)
+```
+
+Outlier segments are removed around the median, remaining velocities receive
+recency weights, and the future image-space path is projected over horizon `H`:
+
+```text
+p(t) = p₀ + v·t,  0 ≤ t ≤ H
+```
+
+Closest points on the two finite projected segments provide the shared conflict
+region and arrival estimates. The difference between those estimated arrivals,
+closing motion, zone membership, footprint overlap, and temporal persistence
+determine the provisional LOW/MEDIUM/HIGH label.
+
+## Suspected-collision evidence
+
+`nearmiss/incidents.py` operates independently of prediction. It groups
+same-frame vehicle pairs into contact episodes and requires:
+
+- persistent bounding-box contact across multiple frames;
+- significant overlap, or contact followed by track loss;
+- measured convergence before contact; and
+- at least one motion response: abrupt velocity change, sudden image-space
+  deceleration, stopping, or post-contact track loss.
+
+Bounding-box overlap alone is rejected. A matching prediction is attached as
+supporting context, but a missed prediction cannot block detection. All velocity,
+overlap, and deceleration thresholds are explicit heuristics, not scientific
+impact measurements or probabilities.
+
+## Verification and simulated dispatch
+
+Operator decisions are persisted in `.nearmiss_data/nearmiss.db` using SQLite.
+The incident ID is the primary key, preventing duplicate review rows. Confirming
+an incident inserts one dispatch notification using a unique incident constraint;
+repeated confirmation cannot create duplicates. False alarms and uncertain
+reviews do not create notifications. Acknowledgement status is also persistent.
+
 ## Project layout
 
 ```text
@@ -83,6 +136,8 @@ app.py                     Streamlit workflow and safety dashboard
 conflict_detector.py       Trajectory, pair screening, diagnostics, deduplication
 nearmiss/config.py         Model classes and detector/tracker defaults
 nearmiss/video.py          Upload, YOLO + ByteTrack, cache, rendering, evidence clips
+nearmiss/incidents.py      Independent multi-signal collision-evidence detector
+nearmiss/store.py          SQLite review and simulated dispatch persistence
 nearmiss/geometry.py       Polygon membership and zone enrichment
 nearmiss/events.py         Event normalization and CSV export
 nearmiss/safety.py         Metrics, heatmap, timeline, review/export helpers
@@ -107,11 +162,20 @@ Nested evidence is preserved in CSV/JSON exports.
 pytest -q
 ```
 
+Latest verified local result (2026-10-24): **35 passed**. A fresh end-to-end
+run of `01_Accident_001.mp4` at confidence 0.31 processed 224 frames into 504
+track observations, returned one HIGH prediction at 1.033 seconds, and returned
+one independently detected suspected collision at 1.200 seconds. The suspected
+pair was associated with that prediction. These are clip-specific integration
+results, not accuracy statistics.
+
 Synthetic tests cover simultaneous and different-time crossings, parallel and
 diverging traffic, a stationary vehicle, missed frames, ID changes, tracking
 jitter, multiple vehicles, temporal confirmation, zone exclusion, deduplication,
-heatmap alignment, timeline values, review labels, malformed events, and PDF
-generation with zero or multiple events.
+heatmap alignment, timeline values, malformed events, sudden deceleration without
+contact, perspective overlap, collision detection without prediction, duplicate
+incident prevention, persistent review, exactly-once notification generation,
+acknowledgement, and PDF generation with zero or multiple events.
 
 ## Cache behavior
 
@@ -119,6 +183,22 @@ Uploads, tracks, annotated outputs, and evidence clips live under
 `.nearmiss_cache/`. **Clear all cached videos** deletes every per-video cache
 directory and session zone/review/report state while preserving only reusable
 Ultralytics configuration/model data.
+
+Persistent operator reviews and simulated notifications are stored separately in
+`.nearmiss_data/nearmiss.db`; clearing video-processing cache does not erase the
+audit trail.
+
+## Demonstration
+
+1. Run `streamlit run app.py` and upload the original source MP4.
+2. Select **Analyze Video** and show the PREDICT warning in annotated playback.
+3. Open DETECT and select the genuine suspected-collision record.
+4. In VERIFY, replay the source clip and select **Confirm Incident**.
+5. In NOTIFY, open the newly created local dispatch message and acknowledge it.
+
+If either detector returns no event, the corresponding stage shows an honest
+empty state. Synthetic fixtures exist only under `tests/` and never populate the
+dashboard.
 
 ## Limitations
 

@@ -167,6 +167,51 @@ def frame_at_timestamp(path: Path, timestamp_seconds: float) -> np.ndarray:
     return frame
 
 
+def annotate_incident_frame(frame_bgr: np.ndarray, incident: dict) -> np.ndarray:
+    """Draw one suspected-collision evidence record on an actual source frame."""
+
+    frame = frame_bgr.copy()
+    color = (20, 20, 255)
+    for prefix in ("vehicle_a", "vehicle_b"):
+        bbox = incident.get(f"{prefix}_bbox")
+        track_id = incident.get(f"{prefix}_track_id", "?")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = (int(float(value)) for value in bbox)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
+        cv2.putText(
+            frame,
+            f"V#{track_id}",
+            (x1 + 4, max(18, y1 - 7)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+    point = incident.get("contact_point")
+    if isinstance(point, (list, tuple)) and len(point) == 2:
+        contact = tuple(int(float(value)) for value in point)
+        cv2.circle(frame, contact, 20, color, 3, cv2.LINE_AA)
+        cv2.drawMarker(frame, contact, color, cv2.MARKER_CROSS, 30, 4)
+    banner = (
+        f'SUSPECTED COLLISION  {float(incident.get("timestamp_seconds", 0.0)):.2f}s  '
+        f'evidence={int(incident.get("evidence_signal_count", 0))}'
+    )
+    cv2.rectangle(frame, (0, 0), (min(frame.shape[1], 560), 38), (15, 23, 42), -1)
+    cv2.putText(
+        frame,
+        banner,
+        (12, 26),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
+    return frame
+
+
 def extract_event_clip(
     artifacts: AnalysisArtifacts,
     event_id: str,
@@ -422,14 +467,20 @@ def _render_key(
     trail_length: int,
     events: list[dict] | None = None,
     incidents: list[dict] | None = None,
+    show_boxes: bool = True,
+    show_trajectories: bool = True,
+    show_track_ids: bool = True,
 ) -> str:
     encoded = json.dumps(
         {
-            "renderer_version": 10,
+            "renderer_version": 11,
             "zone": zone,
             "trail_length": trail_length,
             "events": events or [],
             "incidents": incidents or [],
+            "show_boxes": show_boxes,
+            "show_trajectories": show_trajectories,
+            "show_track_ids": show_track_ids,
         },
         sort_keys=True,
         default=str,
@@ -445,12 +496,23 @@ def render_annotated_video(
     progress: Callable[[float, str], None] | None = None,
     events: list[dict] | None = None,
     incidents: list[dict] | None = None,
+    show_boxes: bool = True,
+    show_trajectories: bool = True,
+    show_track_ids: bool = True,
 ) -> Path:
     """Draw tracks, predictions, suspected incidents, and the selected zone."""
 
     events = events or []
     incidents = incidents or []
-    render_key = _render_key(zone, trail_length, events, incidents)
+    render_key = _render_key(
+        zone,
+        trail_length,
+        events,
+        incidents,
+        show_boxes,
+        show_trajectories,
+        show_track_ids,
+    )
     output_path = artifacts.cache_dir / f"annotated_{render_key}.mp4"
     if output_path.exists() and output_path.stat().st_size > 0:
         if progress:
@@ -536,7 +598,7 @@ def render_annotated_video(
                 conflict_point = event.get("conflict_point")
                 first_path_color = (255, 210, 80)
                 second_path_color = (210, 90, 255)
-                if first_start and first_end:
+                if show_trajectories and first_start and first_end:
                     cv2.arrowedLine(
                         frame,
                         tuple(int(value) for value in first_start),
@@ -546,7 +608,7 @@ def render_annotated_video(
                         cv2.LINE_AA,
                         tipLength=0.08,
                     )
-                if second_start and second_end:
+                if show_trajectories and second_start and second_end:
                     cv2.arrowedLine(
                         frame,
                         tuple(int(value) for value in second_start),
@@ -595,7 +657,12 @@ def render_annotated_video(
                         second_path_color,
                     ),
                 ):
-                    if track_id is None or not bbox or int(track_id) in visible_track_ids:
+                    if (
+                        not show_boxes
+                        or track_id is None
+                        or not bbox
+                        or int(track_id) in visible_track_ids
+                    ):
                         continue
                     x1, y1, x2, y2 = (int(value) for value in bbox)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
@@ -712,7 +779,8 @@ def render_annotated_video(
                     color = (20, 20, 255)
                     thickness = 4
                 trails[track_id].append(center)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+                if show_boxes:
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
                 suffix = (
                     "  SUSPECTED"
                     if highlighted_incident
@@ -720,20 +788,27 @@ def render_annotated_video(
                     if highlighted_event
                     else ""
                 )
-                label = f'{record["class_name"]}  #{track_id}{suffix}'
-                cv2.rectangle(frame, (x1, max(0, y1 - 24)), (x1 + 10 + 9 * len(label), y1), color, -1)
-                cv2.putText(
-                    frame,
-                    label,
-                    (x1 + 5, max(15, y1 - 7)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (15, 23, 42),
-                    1,
-                    cv2.LINE_AA,
-                )
+                if show_track_ids:
+                    label = f'{record["class_name"]}  #{track_id}{suffix}'
+                    cv2.rectangle(
+                        frame,
+                        (x1, max(0, y1 - 24)),
+                        (x1 + 10 + 9 * len(label), y1),
+                        color,
+                        -1,
+                    )
+                    cv2.putText(
+                        frame,
+                        label,
+                        (x1 + 5, max(15, y1 - 7)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (15, 23, 42),
+                        1,
+                        cv2.LINE_AA,
+                    )
                 points = np.asarray(trails[track_id], dtype=np.int32)
-                if len(points) >= 2:
+                if show_trajectories and len(points) >= 2:
                     cv2.polylines(frame, [points], False, color, 2 if highlighted_event else 1)
 
             cv2.putText(

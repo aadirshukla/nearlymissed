@@ -1,5 +1,7 @@
 .nearmiss_cache/
-.streamlit/
+.nearmiss_data/
+.streamlit/*
+!.streamlit/config.toml
 __pycache__/
 *.py[cod]
 *.pt

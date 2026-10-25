@@ -1,12 +1,16 @@
-"""NearMiss Streamlit application."""
+"""NearMiss premium Streamlit interface.
+
+The UI is intentionally thin: detection, tracking, prediction, incident
+evidence, persistence, and reporting remain in their existing backend modules.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from pathlib import Path
 
 import cv2
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -16,6 +20,7 @@ from conflict_detector import detect_conflicts, diagnose_conflicts
 from nearmiss.config import DEFAULT_CONFLICT_CONFIG, TrackingConfig
 from nearmiss.events import events_to_csv, format_timestamp, normalize_events
 from nearmiss.geometry import enrich_tracks_with_zone, normalized_polygon
+from nearmiss.incidents import DEFAULT_COLLISION_CONFIG, detect_suspected_collisions
 from nearmiss.report import generate_safety_report
 from nearmiss.safety import (
     build_conflict_heatmap,
@@ -27,9 +32,16 @@ from nearmiss.safety import (
     safety_statistics,
     timeline_rows,
 )
+from nearmiss.store import (
+    acknowledge_notification,
+    list_notifications,
+    list_reviews,
+    review_incident,
+)
 from nearmiss.video import (
     VideoError,
     analyze_video,
+    annotate_incident_frame,
     cache_summary,
     cached_analysis,
     clear_analysis_cache,
@@ -44,52 +56,207 @@ from nearmiss.video import (
 
 try:
     from streamlit_image_coordinates import streamlit_image_coordinates
-except ImportError:  # pragma: no cover - requirements include the component
+except ImportError:  # pragma: no cover - dependency is included in requirements
     streamlit_image_coordinates = None
 
 
+COLORS = {
+    "background": "#09090B",
+    "card": "#111113",
+    "accent": "#FAFAFA",
+    "text": "#FAFAFA",
+    "muted": "#A1A1AA",
+    "warning": "#D6A75C",
+    "critical": "#E06B72",
+    "success": "#65B89E",
+    "border": "#27272A",
+}
+
+
 st.set_page_config(
-    page_title="NearMiss · Safer streets through vision",
+    page_title="NearMiss Safety Operations",
     page_icon="◉",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-st.session_state.setdefault("upload_generation", 0)
-
-st.markdown(
-    """
-    <style>
-    :root { --ink:#e8eefc; --muted:#94a3b8; --cyan:#38bdf8; --orange:#fb923c; }
-    .stApp { background: radial-gradient(circle at 72% -10%, #172554 0, #090f1f 38%, #070b14 75%); }
-    [data-testid="stSidebar"] { background: #0b1220; border-right: 1px solid #1e293b; }
-    .nm-eyebrow { color:var(--cyan); letter-spacing:.16em; text-transform:uppercase;
-      font-weight:700; font-size:.75rem; margin-bottom:.5rem; }
-    .nm-title { font-size:clamp(2.4rem,6vw,5rem); line-height:.9; font-weight:800;
-      letter-spacing:-.06em; margin:0 0 1rem; color:#f8fafc; }
-    .nm-title span { color:var(--cyan); }
-    .nm-subtitle { color:#a8b3c7; font-size:1.08rem; max-width:720px; line-height:1.65; }
-    .nm-notice { border:1px solid #334155; border-left:3px solid var(--orange); border-radius:10px;
-      padding:.8rem 1rem; background:#111827aa; color:#cbd5e1; font-size:.9rem; margin:1.2rem 0; }
-    .nm-step { display:inline-flex; align-items:center; justify-content:center; width:1.7rem; height:1.7rem;
-      background:#0c4a6e; color:#7dd3fc; border-radius:99px; font-weight:800; margin-right:.5rem; }
-    [data-testid="stMetric"] { background:#101827cc; border:1px solid #243044; padding:1rem;
-      border-radius:14px; }
-    [data-testid="stFileUploaderDropzone"] { border-color:#334155; background:#0f172a; }
-    .stButton>button, .stDownloadButton>button { border-radius:9px; font-weight:650; }
-    div[data-testid="stStatusWidget"] { background:#0f172a; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 
-def section_title(number: int, title: str) -> None:
-    st.markdown(f'<h3><span class="nm-step">{number}</span>{title}</h3>', unsafe_allow_html=True)
+def apply_styles() -> None:
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+          --nm-bg:{COLORS['background']}; --nm-card:{COLORS['card']};
+          --nm-accent:{COLORS['accent']}; --nm-text:{COLORS['text']};
+          --nm-muted:{COLORS['muted']}; --nm-warning:{COLORS['warning']};
+          --nm-critical:{COLORS['critical']}; --nm-success:{COLORS['success']};
+          --nm-border:{COLORS['border']};
+        }}
+        html {{ color-scheme:dark; }}
+        html, body, [class*="css"] {{ font-family:Inter, Geist, ui-sans-serif, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing:antialiased; }}
+        .stApp {{ background:var(--nm-bg); color:var(--nm-text); }}
+        [data-testid="stHeader"] {{ background:rgba(9,9,11,.92); border-bottom:1px solid transparent; }}
+        [data-testid="stMainBlockContainer"] {{ max-width:1180px; padding:5rem 3rem 6rem; }}
+        [data-testid="stSidebar"] {{ background:#0C0C0E; border-right:1px solid var(--nm-border);
+          min-width:232px !important; max-width:232px !important; }}
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ padding:1.35rem .8rem; }}
+        .nm-brand {{ padding:.2rem .55rem 2.15rem; }}
+        .nm-brand-name {{ color:var(--nm-text); font-size:1rem; font-weight:650;
+          letter-spacing:-.015em; }}
+        .nm-brand-sub {{ color:#71717A; font-size:.66rem; font-weight:600;
+          letter-spacing:.13em; text-transform:uppercase; margin-top:.42rem; }}
+        [data-testid="stSidebar"] [role="radiogroup"] {{ gap:.12rem; }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{
+          min-height:2.35rem; padding:.48rem .62rem; border-radius:6px; border:1px solid transparent;
+          color:#8D8D96; transition:background-color 180ms cubic-bezier(.2,0,0,1),
+          color 180ms cubic-bezier(.2,0,0,1);
+        }}
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+          background:#151517; color:#D4D4D8;
+        }}
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
+          background:#1A1A1D; color:var(--nm-text);
+        }}
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {{
+          color:var(--nm-text); font-weight:570;
+        }}
+        [data-testid="stSidebar"] [role="radiogroup"] label > div > div:first-child {{ display:none; }}
+        .nm-page-kicker {{ color:#71717A; font-size:.72rem; line-height:1.4;
+          letter-spacing:.02em; font-weight:530; margin-bottom:1rem; padding-top:.1rem; }}
+        .nm-page-title {{ color:var(--nm-text); font-size:2.7rem; line-height:1.06;
+          letter-spacing:-.05em; font-weight:620; margin:0; max-width:780px; }}
+        .nm-page-subtitle {{ color:#A1A1AA; font-size:1rem; line-height:1.65;
+          max-width:690px; margin:.9rem 0 3rem; }}
+        .nm-section-title {{ color:var(--nm-text); font-size:1rem; font-weight:570;
+          letter-spacing:-.012em; margin:2.65rem 0 .32rem; }}
+        .nm-section-copy {{ color:#71717A; font-size:.82rem; margin:0 0 1.15rem; }}
+        .nm-status {{ display:inline-flex; align-items:center; border-radius:999px;
+          padding:.2rem .48rem; font-size:.68rem; line-height:1.25; font-weight:560;
+          border:1px solid var(--nm-border); background:transparent; color:#A1A1AA; }}
+        .nm-status.success {{ color:#87C7B3; border-color:#29473E; }}
+        .nm-status.warning {{ color:#D7B477; border-color:#52432A; }}
+        .nm-status.critical {{ color:#E18A8E; border-color:#573236; }}
+        .nm-empty {{ border-top:1px solid var(--nm-border); border-bottom:1px solid var(--nm-border);
+          padding:3.2rem 1rem; text-align:center; background:transparent; color:#71717A; }}
+        .nm-workflow {{ display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--nm-border);
+          border-bottom:1px solid var(--nm-border); margin:-.5rem 0 2.8rem; }}
+        .nm-workflow-step {{ padding:.85rem 0; color:#71717A; font-size:.72rem; }}
+        .nm-workflow-step strong {{ color:#D4D4D8; font-weight:540; margin-right:.35rem; }}
+        .nm-file-meta {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+          gap:1.2rem 1rem; margin-top:1.25rem; }}
+        .nm-file-meta-item {{ border-top:1px solid var(--nm-border); padding-top:.75rem; min-width:0; }}
+        .nm-file-meta-label {{ color:#71717A; font-size:.7rem; margin-bottom:.28rem; }}
+        .nm-file-meta-value {{ color:#E4E4E7; font-size:.9rem; white-space:nowrap;
+          overflow:hidden; text-overflow:ellipsis; }}
+        .nm-row-separator {{ height:1px; background:var(--nm-border); margin:.65rem 0; }}
+        .nm-meta {{ color:#71717A; font-size:.78rem; line-height:1.6; }}
+        .nm-hero-rule {{ height:1px; background:var(--nm-border); margin:0 0 2.2rem; }}
+        [data-testid="stMetric"] {{ background:transparent; border:0; border-top:1px solid var(--nm-border);
+          padding:1rem 0 .65rem; border-radius:0; box-shadow:none; min-height:90px; }}
+        [data-testid="stMetricLabel"] {{ color:#71717A; font-size:.72rem; }}
+        [data-testid="stMetricValue"] {{ color:var(--nm-text); font-size:1.8rem;
+          font-weight:560; letter-spacing:-.04em; }}
+        [data-testid="stVerticalBlockBorderWrapper"] {{ background:transparent;
+          border-color:var(--nm-border) !important; border-radius:6px !important; }}
+        [data-testid="stFileUploaderDropzone"] {{ background:#0D0D0F; border:1px dashed #3F3F46;
+          border-radius:7px; padding:1.15rem; transition:border-color 180ms cubic-bezier(.2,0,0,1),
+          background-color 180ms cubic-bezier(.2,0,0,1); }}
+        [data-testid="stFileUploaderDropzone"]:hover {{ border-color:#71717A; background:#111113; }}
+        .stButton > button, .stDownloadButton > button {{ border-radius:6px; min-height:2.45rem;
+          font-weight:540; border:1px solid #303036; background:#151517; color:#E4E4E7;
+          transition:background-color 180ms cubic-bezier(.2,0,0,1),
+          border-color 180ms cubic-bezier(.2,0,0,1), color 180ms cubic-bezier(.2,0,0,1); }}
+        .stButton > button:hover, .stDownloadButton > button:hover {{
+          background:#1C1C1F; border-color:#52525B; color:#FAFAFA; }}
+        .stButton > button:active, .stDownloadButton > button:active {{ transform:translateY(1px); }}
+        .stButton > button:focus-visible, .stDownloadButton > button:focus-visible,
+        [data-testid="stSidebar"] label:has(input:focus-visible) {{ outline:2px solid #A1A1AA;
+          outline-offset:2px; }}
+        .stButton > button[kind="primary"] {{ background:#FAFAFA; color:#09090B;
+          border-color:#FAFAFA; }}
+        .stButton > button[kind="primary"]:hover {{ color:#09090B; background:#E4E4E7;
+          border-color:#E4E4E7; }}
+        [data-testid="stTabs"] [role="tablist"] {{ gap:1.35rem; border-bottom:1px solid var(--nm-border); }}
+        [data-testid="stTabs"] button {{ color:#71717A; padding:.65rem 0; font-size:.82rem; }}
+        [data-testid="stTabs"] button[aria-selected="true"] {{ color:#FAFAFA; }}
+        [data-testid="stDataFrame"] {{ border:1px solid var(--nm-border); border-radius:6px; overflow:hidden; }}
+        [data-testid="stAlert"] {{ border-radius:6px; border-width:1px; background:#111113; }}
+        [data-testid="stExpander"] details {{ border-color:var(--nm-border); border-radius:6px; background:transparent; }}
+        [data-testid="stCheckbox"] label:has(input[role="switch"]:checked) > div:nth-of-type(1) {{
+          background-color:#E4E4E7 !important;
+        }}
+        [data-testid="stProgress"] > div > div {{ background:#E4E4E7; }}
+        hr {{ border-color:var(--nm-border) !important; opacity:1; }}
+        .nm-footer {{ color:#52525B; font-size:.68rem; margin-top:3rem; line-height:1.6; }}
+        @media (max-width: 900px) {{
+          [data-testid="stSidebar"] {{ min-width:205px !important; max-width:205px !important; }}
+          [data-testid="stMainBlockContainer"] {{ padding:4.5rem 1.5rem 4rem; }}
+          .nm-page-title {{ font-size:2.15rem; }}
+          .st-key-overview_media [data-testid="stHorizontalBlock"] {{ flex-direction:column; }}
+          .st-key-overview_media [data-testid="stColumn"] {{ width:100% !important;
+            flex:1 1 100% !important; }}
+        }}
+        @media (max-width: 640px) {{
+          [data-testid="stMainBlockContainer"] {{ padding:4.2rem 1rem 4rem; }}
+          .nm-page-title {{ font-size:1.9rem; }}
+          .nm-page-subtitle {{ margin-bottom:2.2rem; }}
+          .nm-workflow {{ grid-template-columns:repeat(2,1fr); }}
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+          *, *::before, *::after {{ transition-duration:.01ms !important;
+            animation-duration:.01ms !important; animation-iteration-count:1 !important; }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def page_header(kicker: str, title: str, subtitle: str) -> None:
+    st.markdown(
+        f'<div class="nm-page-kicker">{kicker}</div>'
+        f'<h1 class="nm-page-title">{title}</h1>'
+        f'<p class="nm-page-subtitle">{subtitle}</p>',
+        unsafe_allow_html=True,
+    )
+
+
+def section_header(title: str, copy: str | None = None) -> None:
+    st.markdown(f'<div class="nm-section-title">{title}</div>', unsafe_allow_html=True)
+    if copy:
+        st.markdown(f'<p class="nm-section-copy">{copy}</p>', unsafe_allow_html=True)
+
+
+def status_pill(label: str, tone: str = "") -> None:
+    css_class = f"nm-status {tone}".strip()
+    st.markdown(f'<span class="{css_class}">{label}</span>', unsafe_allow_html=True)
+
+
+def empty_state(title: str, message: str) -> None:
+    st.markdown(
+        f'<div class="nm-empty"><strong style="color:{COLORS["text"]}">{title}</strong>'
+        f'<div style="margin-top:.45rem">{message}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def progress_callback(progress_bar):
+    def update(fraction: float, message: str) -> None:
+        progress_bar.progress(max(0.0, min(float(fraction), 1.0)), text=message)
+
+    return update
+
+
+def json_default(value):
+    if hasattr(value, "item"):
+        return value.item()
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return str(value)
 
 
 def draw_zone_preview(frame_bgr, zone: list[list[float]], max_width: int = 900):
-    """Return a resized PIL preview and its original/display scale factors."""
-
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     original = Image.fromarray(rgb)
     ratio = min(1.0, max_width / original.width)
@@ -98,43 +265,37 @@ def draw_zone_preview(frame_bgr, zone: list[list[float]], max_width: int = 900):
     draw = ImageDraw.Draw(preview, "RGBA")
     display_points = [(int(x * ratio), int(y * ratio)) for x, y in zone]
     if len(display_points) >= 3:
-        draw.polygon(display_points, fill=(56, 189, 248, 35), outline=(56, 189, 248, 255), width=3)
+        draw.polygon(display_points, fill=(250, 250, 250, 24), outline=(212, 212, 216, 255), width=3)
     elif len(display_points) >= 2:
-        draw.line(display_points, fill=(56, 189, 248, 255), width=3)
-    for index, point in enumerate(display_points, start=1):
-        x, y = point
-        draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=(251, 146, 60, 255), outline="white", width=2)
-        draw.text((x + 10, y - 11), str(index), fill="white", stroke_width=2, stroke_fill=(0, 0, 0))
+        draw.line(display_points, fill=(212, 212, 216, 255), width=3)
+    for index, (x, y) in enumerate(display_points, start=1):
+        draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=(244, 184, 96, 255))
+        draw.text((x + 9, y - 10), str(index), fill="white")
     return preview, ratio
 
 
 def zone_picker(video_hash: str, first_frame) -> tuple[list[list[float]], list[list[float]]]:
-    """Interactive polygon editor; returns (draft, applied) pixel-space zones."""
-
     draft_key = f"zone_draft_{video_hash}"
     applied_key = f"zone_applied_{video_hash}"
     last_click_key = f"zone_last_click_{video_hash}"
     st.session_state.setdefault(draft_key, [])
     st.session_state.setdefault(applied_key, [])
     st.session_state.setdefault(last_click_key, None)
-
-    controls = st.columns([1, 1, 2.2])
-    if controls[0].button("Undo point", key=f"undo_{video_hash}", use_container_width=True):
+    controls = st.columns([1, 1, 2])
+    if controls[0].button("Undo", key=f"undo_{video_hash}", width="stretch"):
         if st.session_state[draft_key]:
             st.session_state[draft_key].pop()
-    if controls[1].button("Clear", key=f"clear_{video_hash}", use_container_width=True):
+    if controls[1].button("Clear", key=f"clear_zone_{video_hash}", width="stretch"):
         st.session_state[draft_key] = []
-    can_apply = len(st.session_state[draft_key]) >= 3
     if controls[2].button(
-        "Use this conflict zone",
+        "Apply analysis area",
         key=f"apply_{video_hash}",
         type="primary",
-        disabled=not can_apply,
-        use_container_width=True,
+        disabled=len(st.session_state[draft_key]) < 3,
+        width="stretch",
     ):
         st.session_state[applied_key] = [point[:] for point in st.session_state[draft_key]]
-        st.toast("Conflict zone applied")
-
+        st.toast("Analysis area saved")
     preview, ratio = draw_zone_preview(first_frame, st.session_state[draft_key])
     if streamlit_image_coordinates is not None:
         click = streamlit_image_coordinates(preview, key=f"zone_image_{video_hash}")
@@ -147,163 +308,169 @@ def zone_picker(video_hash: str, first_frame) -> tuple[list[list[float]], list[l
                 )
                 st.rerun()
     else:
-        st.image(preview, caption="Preview (coordinate component unavailable)")
-        st.warning("Install streamlit-image-coordinates to select the zone by clicking.")
-
-    point_count = len(st.session_state[draft_key])
-    if point_count < 3:
-        st.caption(f"Click at least 3 corners in order · {point_count} selected")
-    else:
-        st.caption(f"{point_count} corners selected · apply the zone when its shape looks right")
+        st.image(preview, width="stretch")
+        st.warning("Install streamlit-image-coordinates to draw an analysis area.")
+    st.caption(
+        "Click the boundary corners in order. Leave empty to analyze the full frame."
+    )
     return st.session_state[draft_key], st.session_state[applied_key]
 
 
-def progress_callback(progress_bar):
-    def update(fraction: float, message: str) -> None:
-        progress_bar.progress(max(0.0, min(float(fraction), 1.0)), text=message)
-
-    return update
-
-
-def json_default(value):
-    """Make NumPy-like values from custom detectors safe for JSON export."""
-
-    if hasattr(value, "item"):
-        return value.item()
-    if hasattr(value, "tolist"):
-        return value.tolist()
-    return str(value)
-
-
 def conflict_timeline_figure(events: list[dict]):
-    """Build an event-linked timeline without inventing missing scores."""
-
     rows = timeline_rows(events)
     if not rows:
         return None
-    timeline_df = pd.DataFrame(rows)
-    y_column = "risk_score" if timeline_df["risk_score"].notna().all() else "severity"
+    frame = pd.DataFrame(rows)
+    frame["display_level"] = frame["severity"].map({"LOW": 1, "MEDIUM": 2, "HIGH": 3})
     figure = px.scatter(
-        timeline_df,
+        frame,
         x="timestamp_seconds",
-        y=y_column,
+        y="display_level",
         color="severity",
         hover_data=[
-            column
-            for column in [
-                "event_id",
-                "participant_a_track_id",
-                "participant_b_track_id",
-                "arrival_time_gap_seconds",
-                "time_to_conflict_seconds",
-                "risk_score",
-            ]
-            if column in timeline_df
+            "event_id",
+            "participant_a_track_id",
+            "participant_b_track_id",
+            "arrival_time_gap_seconds",
+            "time_to_conflict_seconds",
         ],
-        labels={
-            "timestamp_seconds": "First alert (seconds)",
-            "risk_score": "Heuristic conflict score",
-            "severity": "Risk category",
-        },
-        color_discrete_map={"LOW": "#facc15", "MEDIUM": "#fb923c", "HIGH": "#f43f5e"},
+        color_discrete_map={"LOW": COLORS["warning"], "MEDIUM": "#E28B55", "HIGH": COLORS["critical"]},
+        labels={"timestamp_seconds": "Video time", "display_level": "Priority"},
     )
-    figure.update_traces(marker={"size": 14, "line": {"width": 1, "color": "white"}})
+    figure.update_traces(marker={"size": 13, "line": {"width": 1, "color": COLORS["text"]}})
+    figure.update_yaxes(
+        tickmode="array", tickvals=[1, 2, 3], ticktext=["Low", "Medium", "High"], range=[0.6, 3.4]
+    )
     figure.update_layout(
-        height=280,
-        margin={"l": 8, "r": 8, "t": 24, "b": 8},
+        height=250,
+        margin={"l": 8, "r": 8, "t": 12, "b": 8},
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        legend_title_text="Provisional risk",
+        font={"color": COLORS["muted"]},
+        legend_title_text="Priority",
+        xaxis={"gridcolor": "#26313E"},
+        yaxis={"gridcolor": "#26313E"},
     )
     return figure
 
 
-st.markdown('<div class="nm-eyebrow">Computer vision for safer streets</div>', unsafe_allow_html=True)
-st.markdown('<h1 class="nm-title">Near<span>Miss</span></h1>', unsafe_allow_html=True)
-st.markdown(
-    '<p class="nm-subtitle">Upload an intersection video, track road users, '
-    "and inspect potential vehicle conflict flags with frame-level evidence.</p>",
-    unsafe_allow_html=True,
+def queue_page(page: str) -> None:
+    st.session_state["_next_page"] = page
+
+
+def clear_interface_state() -> None:
+    for key in list(st.session_state):
+        if str(key).startswith(
+            (
+                "zone_draft_",
+                "zone_applied_",
+                "zone_last_click_",
+                "event_reviews_",
+                "review_status_",
+                "safety_report_",
+                "selected_incident_",
+                "camera_id_",
+            )
+        ):
+            del st.session_state[key]
+    st.session_state.pop("active_video", None)
+
+
+apply_styles()
+st.session_state.setdefault("upload_generation", 0)
+legacy_navigation = {
+    "Upload": "Overview",
+    "Analyze": "Analysis",
+    "Review": "Incidents",
+    "Notify": "Dispatch",
+}
+st.session_state.setdefault("navigation", "Overview")
+st.session_state["navigation"] = legacy_navigation.get(
+    st.session_state["navigation"], st.session_state["navigation"]
 )
-st.markdown(
-    '<div class="nm-notice"><b>Decision-support prototype.</b> Any detector output is a '
-    "heuristic flag—not a verified crash or near miss. Review the source video before "
-    "drawing conclusions.</div>",
-    unsafe_allow_html=True,
-)
+if "_next_page" in st.session_state:
+    requested_page = st.session_state.pop("_next_page")
+    st.session_state["navigation"] = legacy_navigation.get(requested_page, requested_page)
+
 
 with st.sidebar:
-    st.markdown("## Analysis settings")
-    model_label = st.selectbox(
-        "CPU model",
-        ["YOLO11 nano", "YOLOv8 nano"],
-        help="Nano models prioritize speed and are suitable for this CPU-first prototype.",
+    st.markdown(
+        '<div class="nm-brand"><div class="nm-brand-name">NearMiss</div>'
+        '<div class="nm-brand-sub">Safety operations</div></div>',
+        unsafe_allow_html=True,
     )
-    model_name = "yolo11n.pt" if model_label == "YOLO11 nano" else "yolov8n.pt"
-    confidence = st.slider("Detection confidence", 0.10, 0.90, 0.30, 0.05)
-    iou_threshold = st.slider("Detection IoU threshold", 0.10, 0.90, 0.50, 0.05)
-    trail_length = st.slider("Trajectory length (frames)", 5, 90, 30, 5)
-    st.caption("The first use downloads public pretrained weights. Later runs are local.")
+    navigation = st.radio(
+        "Workspace",
+        ["Overview", "Analysis", "Incidents", "Dispatch"],
+        key="navigation",
+        label_visibility="collapsed",
+    )
+    st.markdown("<div style='height:.75rem'></div>", unsafe_allow_html=True)
 
-    with st.expander("Local cache", expanded=False):
-        cached_video_count, cached_bytes = cache_summary()
-        st.caption(
-            f"{cached_video_count} cached video(s) · {cached_bytes / (1024 * 1024):.1f} MB"
-        )
-        if st.button("Clear all cached videos", use_container_width=True):
-            removed_count, removed_bytes = clear_analysis_cache()
-            for key in list(st.session_state):
-                if str(key).startswith(
-                    (
-                        "zone_draft_",
-                        "zone_applied_",
-                        "zone_last_click_",
-                        "event_reviews_",
-                        "review_status_",
-                        "safety_report_",
-                    )
-                ):
-                    del st.session_state[key]
-            # Rotate the uploader key so Streamlit releases the selected file;
-            # otherwise the next rerun immediately recreates its cache folder.
-            st.session_state["upload_generation"] += 1
-            st.toast(
-                f"Removed {removed_count} cached video(s) "
-                f"({removed_bytes / (1024 * 1024):.1f} MB)"
-            )
-            st.rerun()
-
-    with st.expander("Conflict detector configuration", expanded=False):
+    with st.expander("Advanced settings", expanded=False):
+        model_label = st.selectbox("Detection model", ["YOLO11 nano", "YOLOv8 nano"])
+        model_name = "yolo11n.pt" if model_label == "YOLO11 nano" else "yolov8n.pt"
+        confidence = st.slider("Object confidence", 0.10, 0.90, 0.30, 0.05)
+        iou_threshold = st.slider("Object overlap threshold", 0.10, 0.90, 0.50, 0.05)
+        trail_length = st.slider("Trail length", 5, 90, 30, 5)
         interaction_label = st.selectbox(
-            "Interaction mode",
-            ["Vehicle to vehicle", "Vehicle to pedestrian", "Both"],
-            index=0,
+            "Prediction mode", ["Vehicle to vehicle", "Vehicle to pedestrian", "Both"]
         )
         prediction_horizon = st.slider(
-            "Prediction horizon (seconds)", 1.0, 3.0,
+            "Look-ahead window", 1.0, 3.0,
             float(DEFAULT_CONFLICT_CONFIG["prediction_horizon_seconds"]), 0.1,
+            format="%.1f sec",
         )
         high_time_gap = st.slider(
-            "HIGH arrival gap (seconds)", 0.1, 1.5,
+            "High-priority arrival gap", 0.10, 1.50,
             float(DEFAULT_CONFLICT_CONFIG["high_time_gap_seconds"]), 0.05,
+            format="%.2f sec",
         )
         low_time_gap = st.slider(
-            "Maximum qualifying arrival gap (seconds)", 0.5, 3.0,
+            "Maximum arrival gap", 0.50, 3.00,
             float(DEFAULT_CONFLICT_CONFIG["low_time_gap_seconds"]), 0.05,
+            format="%.2f sec",
         )
         minimum_history = st.slider(
-            "Minimum trajectory observations", 3, 15,
+            "Minimum track history", 3, 15,
             int(DEFAULT_CONFLICT_CONFIG["min_track_age_frames"]), 1,
         )
         high_confirmation = st.slider(
-            "Frames required for HIGH", 2, 10,
+            "High-priority confirmation", 2, 10,
             int(DEFAULT_CONFLICT_CONFIG["high_persistence_frames"]), 1,
+            format="%d frames",
         )
-        debug_mode = st.checkbox("Debug rejected vehicle pairs", value=False)
-        st.caption(
-            "All distances and velocities are image-space approximations. "
-            "These controls change heuristic screening, not accident probability."
+        collision_overlap = st.slider(
+            "Incident overlap evidence", 0.20, 0.70,
+            float(DEFAULT_COLLISION_CONFIG["minimum_strong_overlap_fraction"]), 0.01,
         )
+        collision_persistence = st.slider(
+            "Incident contact duration", 2, 8,
+            int(DEFAULT_COLLISION_CONFIG["contact_persistence_frames"]), 1,
+            format="%d frames",
+        )
+        collision_deceleration = st.slider(
+            "Post-contact speed ratio", 0.20, 0.90,
+            float(DEFAULT_COLLISION_CONFIG["deceleration_speed_ratio"]), 0.05,
+        )
+        debug_mode = st.toggle("Show technical diagnostics", value=False)
+
+    with st.expander("Storage", expanded=False):
+        cached_video_count, cached_bytes = cache_summary()
+        st.caption(f"{cached_video_count} cached video(s) · {cached_bytes / 1048576:.1f} MB")
+        if st.button("Clear processed videos", width="stretch"):
+            removed_count, removed_bytes = clear_analysis_cache()
+            clear_interface_state()
+            st.session_state["upload_generation"] += 1
+            st.session_state["_next_page"] = "Overview"
+            st.toast(f"Removed {removed_count} video(s), {removed_bytes / 1048576:.1f} MB")
+            st.rerun()
+
+    st.markdown(
+        '<div class="nm-footer">Runs locally<br>No emergency-service connection</div>',
+        unsafe_allow_html=True,
+    )
+
 
 tracking_config = TrackingConfig(
     model_name=model_name,
@@ -326,82 +493,156 @@ conflict_config = {
     "min_track_age_frames": int(minimum_history),
     "high_persistence_frames": int(high_confirmation),
 }
+collision_config = {
+    **DEFAULT_COLLISION_CONFIG,
+    "minimum_strong_overlap_fraction": float(collision_overlap),
+    "contact_persistence_frames": int(collision_persistence),
+    "deceleration_speed_ratio": float(collision_deceleration),
+}
 
-section_title(1, "Upload Traffic Footage")
-uploaded = st.file_uploader(
-    "MP4 video",
-    type=["mp4"],
-    key=f'video_upload_{st.session_state["upload_generation"]}',
-    label_visibility="collapsed",
-    help="Short, fixed-camera clips process fastest on CPU. Maximum size: 500 MB.",
-)
 
-if uploaded is None:
-    st.info("Choose an MP4 to begin. Your video stays on this machine.", icon="↗")
+active_video = st.session_state.get("active_video")
+
+if navigation == "Overview":
+    page_header(
+        "Overview",
+        "Turn traffic footage into reviewable evidence.",
+        "NearMiss follows vehicle movement, surfaces possible conflicts, and keeps every operator decision connected to the original video.",
+    )
+    st.markdown(
+        '<div class="nm-workflow">'
+        '<div class="nm-workflow-step"><strong>1</strong>Upload footage</div>'
+        '<div class="nm-workflow-step"><strong>2</strong>Run analysis</div>'
+        '<div class="nm-workflow-step"><strong>3</strong>Review evidence</div>'
+        '<div class="nm-workflow-step"><strong>4</strong>Acknowledge</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    uploaded = st.file_uploader(
+        "Traffic camera video",
+        type=["mp4"],
+        key=f'video_upload_{st.session_state["upload_generation"]}',
+        help="Use original footage rather than a previously annotated export.",
+    )
+    if uploaded is not None:
+        try:
+            video_hash, source_path = save_upload(uploaded.getvalue(), uploaded.name)
+            st.session_state["active_video"] = {
+                "name": uploaded.name,
+                "video_hash": video_hash,
+                "source_path": str(source_path),
+            }
+            active_video = st.session_state["active_video"]
+        except VideoError as exc:
+            st.error(str(exc))
+
+    if not active_video or not Path(active_video["source_path"]).exists():
+        empty_state(
+            "No footage selected",
+            "Drop an MP4 above to preview it and begin analysis.",
+        )
+        st.stop()
+
+    source_path = Path(active_video["source_path"])
+    video_hash = str(active_video["video_hash"])
+    try:
+        initial_metadata, first_frame = inspect_video(source_path)
+    except VideoError as exc:
+        st.error(str(exc))
+        st.stop()
+
+    overview_media = st.container(key="overview_media")
+    preview_col, details_col = overview_media.columns([1.65, 1], gap="large")
+    with preview_col:
+        st.video(str(source_path))
+    with details_col:
+        section_header("Footage ready")
+        status_pill("Ready to analyze", "success")
+        st.markdown(f"**{active_video['name']}**")
+        st.markdown(
+            '<div class="nm-file-meta">'
+            f'<div class="nm-file-meta-item"><div class="nm-file-meta-label">Duration</div>'
+            f'<div class="nm-file-meta-value">{format_timestamp(initial_metadata.duration_seconds)}</div></div>'
+            f'<div class="nm-file-meta-item"><div class="nm-file-meta-label">Frame rate</div>'
+            f'<div class="nm-file-meta-value">{initial_metadata.fps:.0f} fps</div></div>'
+            f'<div class="nm-file-meta-item"><div class="nm-file-meta-label">Frames</div>'
+            f'<div class="nm-file-meta-value">{initial_metadata.frame_count:,}</div></div>'
+            f'<div class="nm-file-meta-item"><div class="nm-file-meta-label">Resolution</div>'
+            f'<div class="nm-file-meta-value">{initial_metadata.width} × {initial_metadata.height}</div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        camera_id = st.text_input(
+            "Camera name",
+            value=f"CAM-{video_hash[:8].upper()}",
+            key=f"camera_id_{video_hash}",
+            help="Used in the simulated dispatch inbox. No street address is inferred.",
+        )
+
+    with st.expander("Optional analysis area", expanded=False):
+        _draft_zone, applied_zone = zone_picker(video_hash, first_frame)
+        if applied_zone:
+            st.success("Custom analysis area is active.")
+
+    existing = cached_analysis(video_hash, source_path, tracking_config, initial_metadata)
+    if existing is not None:
+        st.caption("Processed results already exist for these settings. Opening them will not rerun tracking.")
+    if st.button("Analyze Footage", type="primary", width="stretch"):
+        progress_bar = st.progress(0, text="Preparing footage")
+        try:
+            analyze_video(
+                video_hash,
+                source_path,
+                tracking_config,
+                progress=progress_callback(progress_bar),
+            )
+        except VideoError as exc:
+            progress_bar.empty()
+            st.error(str(exc))
+            st.stop()
+        progress_bar.empty()
+        st.session_state["_next_page"] = "Analysis"
+        st.toast("Analysis complete")
+        st.rerun()
     st.stop()
 
+
+if not active_video or not Path(active_video["source_path"]).exists():
+    page_header(navigation, "No footage selected", "Choose a source video before continuing.")
+    empty_state("Footage required", "Open Overview and upload an MP4 to begin.")
+    st.button("Open Overview", type="primary", on_click=queue_page, args=("Overview",))
+    st.stop()
+
+source_path = Path(active_video["source_path"])
+video_hash = str(active_video["video_hash"])
+source_filename = str(active_video["name"])
 try:
-    upload_bytes = uploaded.getvalue()
-    video_hash, source_path = save_upload(upload_bytes, uploaded.name)
     initial_metadata, first_frame = inspect_video(source_path)
 except VideoError as exc:
     st.error(str(exc))
     st.stop()
 
-meta_cols = st.columns(4)
-meta_cols[0].metric("Duration", format_timestamp(initial_metadata.duration_seconds))
-meta_cols[1].metric("Frames", f"{initial_metadata.frame_count:,}")
-meta_cols[2].metric("Frame rate", f"{initial_metadata.fps:.1f} fps")
-meta_cols[3].metric("Resolution", f"{initial_metadata.width} × {initial_metadata.height}")
-
-section_title(2, "Define the Analysis Zone")
-st.write("Click the boundary corners in order. The final edge closes automatically.")
-draft_zone, applied_zone = zone_picker(video_hash, first_frame)
-if applied_zone:
-    st.success(f"Conflict zone active · {len(applied_zone)} vertices", icon="✅")
-    if draft_zone != applied_zone:
-        st.warning("The draft has unapplied changes; the active zone is still shown in exports and video.")
-elif len(draft_zone) >= 3:
-    st.warning("The draft polygon is not active yet. Select **Use this conflict zone**.")
-
-section_title(3, "Analyze Video")
-existing = cached_analysis(video_hash, source_path, tracking_config, initial_metadata)
-run_clicked = st.button(
-    "Analyze video" if existing is None else "Use cached analysis",
-    type="primary",
-    use_container_width=True,
-)
-
-artifacts = existing
-if run_clicked:
-    progress_bar = st.progress(0, text="Preparing analysis")
-    try:
-        artifacts = analyze_video(
-            video_hash,
-            source_path,
-            tracking_config,
-            progress=progress_callback(progress_bar),
-        )
-    except VideoError as exc:
-        progress_bar.empty()
-        st.error(str(exc))
-        st.stop()
-    progress_bar.empty()
-
+camera_id = st.session_state.get(f"camera_id_{video_hash}", f"CAM-{video_hash[:8].upper()}")
+applied_zone = st.session_state.get(f"zone_applied_{video_hash}", [])
+artifacts = cached_analysis(video_hash, source_path, tracking_config, initial_metadata)
 if artifacts is None:
-    st.caption("Tracking has not run with the current model settings.")
+    page_header(navigation, "Analysis is not ready", "This footage has not been processed with the current settings.")
+    empty_state(
+        "Analysis required",
+        "Return to Overview and select Analyze footage. Changing advanced model settings also requires a new analysis.",
+    )
+    st.button("Return to Overview", type="primary", on_click=queue_page, args=("Overview",))
     st.stop()
 
 try:
     tracks, metadata = load_artifacts(artifacts)
 except (OSError, ValueError, TypeError) as exc:
-    st.error(f"Cached analysis could not be loaded: {exc}")
+    st.error(f"Processed results could not be loaded: {exc}")
     st.stop()
 
-has_user_zone = len(applied_zone) >= 3
 analysis_zone = (
     applied_zone
-    if has_user_zone
+    if len(applied_zone) >= 3
     else [
         [0.0, 0.0],
         [float(metadata.width), 0.0],
@@ -410,472 +651,398 @@ analysis_zone = (
     ]
 )
 tracks_for_detector = enrich_tracks_with_zone(tracks, analysis_zone)
-conflict_config["zone_is_user_defined"] = has_user_zone
-raw_events = []
+conflict_config["zone_is_user_defined"] = len(applied_zone) >= 3
+
 detector_error = None
 try:
     raw_events = detect_conflicts(tracks_for_detector, analysis_zone, conflict_config)
-except Exception as exc:  # user-owned extension point should not crash the dashboard
+except Exception as exc:  # detector errors must remain visible without taking down the UI
+    raw_events = []
     detector_error = str(exc)
-
 events, event_warnings = normalize_events(raw_events, metadata.fps)
 events = deduplicate_events(events)
+
+incident_detector_error = None
+try:
+    incidents = detect_suspected_collisions(
+        tracks, events, source_video_id=video_hash, config=collision_config
+    )
+except Exception as exc:
+    incidents = []
+    incident_detector_error = str(exc)
+
+persisted_reviews = {row["incident_id"]: row for row in list_reviews(video_hash)}
+for incident in incidents:
+    saved = persisted_reviews.get(incident["incident_id"])
+    incident["review_status"] = saved["review_status"] if saved else "Uncertain"
+    incident["camera_id"] = saved["camera_id"] if saved else camera_id
+dispatch_notifications = list_notifications(video_hash)
+statistics = safety_statistics(tracks, events, metadata.duration_seconds)
+
 if detector_error:
-    st.error(f"Conflict detector failed: {detector_error}")
+    st.error(f"Prediction analysis failed: {detector_error}")
+if incident_detector_error:
+    st.error(f"Incident evidence analysis failed: {incident_detector_error}")
 for warning in event_warnings:
     st.warning(warning)
 
-diagnostics: list[dict] = []
-if debug_mode:
+
+if navigation == "Analysis":
+    page_header(
+        "Analysis",
+        "Playback with context",
+        "Follow tracked movement and inspect the moments NearMiss marked for attention.",
+    )
+    section_header("Footage", "Choose which annotations stay visible during playback.")
+    control_cols = st.columns([.8, 1.15, .9, 4])
+    show_boxes = control_cols[0].toggle("Boxes", value=True)
+    show_trajectories = control_cols[1].toggle("Trajectories", value=True)
+    show_track_ids = control_cols[2].toggle("Track IDs", value=True)
+    annotation_progress = st.progress(0, text="Preparing annotated playback")
     try:
-        diagnostics = diagnose_conflicts(tracks_for_detector, analysis_zone, conflict_config)
-    except Exception as exc:
-        st.warning(f"Conflict diagnostics could not be generated: {exc}")
-
-annotation_progress = st.progress(0, text="Preparing annotated video")
-try:
-    annotated_path = render_annotated_video(
-        artifacts,
-        tracks,
-        applied_zone,
-        trail_length=tracking_config.trail_length,
-        progress=progress_callback(annotation_progress),
-        events=events,
-    )
-except VideoError as exc:
-    annotation_progress.empty()
-    st.error(str(exc))
-    st.stop()
-annotation_progress.empty()
-
-unique_vehicles = {
-    record["track_id"] for record in tracks if record["object_type"] == "vehicle"
-}
-unique_pedestrians = {
-    record["track_id"] for record in tracks if record["object_type"] == "pedestrian"
-}
-in_zone_ids = {record["track_id"] for record in tracks_for_detector if record["in_conflict_zone"]}
-
-st.divider()
-section_title(4, "Intersection Safety Analysis")
-statistics = safety_statistics(tracks, events, metadata.duration_seconds)
-summary_cols = st.columns(4)
-summary_cols[0].metric("Vehicles tracked", statistics["vehicles_tracked"])
-summary_cols[1].metric("Unique potential conflicts", statistics["total_conflicts"])
-summary_cols[2].metric(
-    "Conflicts per minute", f'{statistics["conflicts_per_minute"]:.2f}'
-)
-summary_cols[3].metric("Distinct vehicle pairs", statistics["distinct_vehicle_pairs"])
-
-risk_cols = st.columns(4)
-risk_cols[0].metric("HIGH experimental", statistics["high_conflicts"])
-risk_cols[1].metric("MEDIUM experimental", statistics["medium_conflicts"])
-risk_cols[2].metric("LOW experimental", statistics["low_conflicts"])
-average_gap = statistics["average_arrival_gap_seconds"]
-risk_cols[3].metric(
-    "Average predicted time gap",
-    "—" if average_gap is None else f"{average_gap:.3f} s",
-)
-st.caption(
-    "Experimental image-coordinate conflict indicators derived from this processed clip; "
-    "they are not validated crash probabilities or roadway safety ratings."
-)
-
-if not has_user_zone:
-    st.warning(
-        "Whole-frame analysis is active because no conflict zone was selected. "
-        "This is less reliable; draw the intersection or road area to reduce unrelated flags."
-    )
-
-if not tracks:
-    st.warning(
-        "No trackable vehicles or pedestrians met the current confidence threshold. "
-        "Try a lower threshold or a clearer clip."
-    )
-
-video_tab, events_tab, data_tab = st.tabs(["Annotated video", "Event details", "Track data"])
-
-with video_tab:
-    st.video(str(annotated_path))
-    st.caption(
-        "Boxes show detected classes and persistent IDs; lines show recent movement trajectories. "
-        "Detector-provided participants and evidence are highlighted when those fields are present."
-    )
-    timeline_figure = conflict_timeline_figure(events)
-    if timeline_figure is not None:
-        st.markdown("#### Conflict timeline")
-        st.plotly_chart(timeline_figure, use_container_width=True)
-        st.caption("Markers show timestamps supplied by your conflict detector.")
-
-with events_tab:
-    if detector_error:
-        st.error("No timeline is available until the detector error is fixed.")
-    elif not events:
-        st.info(
-            "No qualifying potential conflicts were returned for this footage, zone, "
-            "and detector configuration. This measured zero is not proof of safety."
-        )
-    else:
-        display_events = []
-        for event in events:
-            row = dict(event)
-            row["video_time"] = format_timestamp(event.get("timestamp_seconds"))
-            row["first_alert_time"] = format_timestamp(event.get("first_alert_timestamp_seconds"))
-            display_events.append(row)
-        preferred = [
-            column
-            for column in [
-                "event_id",
-                "first_alert_time",
-                "video_time",
-                "severity",
-                "participant_a_track_id",
-                "participant_a_type",
-                "participant_b_track_id",
-                "participant_b_type",
-                "risk_score",
-                "arrival_time_gap_seconds",
-                "time_to_conflict_seconds",
-                "persistence_frames",
-                "path_separation_pixels",
-                "closing_speed_pixels_per_second",
-                "description",
-            ]
-            if any(column in item for item in display_events)
-        ]
-        remaining = [column for column in pd.DataFrame(display_events).columns if column not in preferred]
-        st.dataframe(pd.DataFrame(display_events)[preferred + remaining], use_container_width=True)
-        st.warning(
-            "Every row is a provisional detector flag requiring human review, not a "
-            "verified accident or near miss."
-        )
-
-with data_tab:
-    counts = (
-        pd.DataFrame(tracks)[["track_id", "class_name", "object_type"]]
-        .drop_duplicates("track_id")
-        .groupby(["object_type", "class_name"], as_index=False)
-        .size()
-        if tracks
-        else pd.DataFrame(columns=["object_type", "class_name", "size"])
-    )
-    if not counts.empty:
-        count_chart = px.bar(
-            counts,
-            x="class_name",
-            y="size",
-            color="object_type",
-            labels={"class_name": "Object class", "size": "Unique tracks"},
-            color_discrete_map={"vehicle": "#fb923c", "pedestrian": "#2dd4bf"},
-        )
-        count_chart.update_layout(
-            height=320,
-            margin={"l": 8, "r": 8, "t": 24, "b": 8},
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
-        st.plotly_chart(count_chart, use_container_width=True)
-
-    if tracks:
-        table = pd.DataFrame(tracks_for_detector)
-        table["bbox"] = table["bbox"].apply(json.dumps)
-        table["center"] = table["center"].apply(json.dumps)
-        st.dataframe(table, use_container_width=True, height=380)
-
-if debug_mode:
-    st.markdown("### Debug conflict pipeline")
-    window_diagnostics = [
-        row
-        for row in diagnostics
-        if 0.5 <= float(row.get("timestamp_seconds", -1.0)) <= 3.0
-    ]
-    stages = pipeline_stage_counts(window_diagnostics, events)
-    stage_columns = st.columns(4)
-    stage_columns[0].metric("Pair evaluations", stages["pair_evaluations"])
-    stage_columns[1].metric("Sufficient history", stages["sufficient_history"])
-    stage_columns[2].metric("Projected path candidates", stages["path_candidates"])
-    stage_columns[3].metric("Deduplicated events", stages["deduplicated_events"])
-    st.caption(
-        f'Valid motion: {stages["valid_motion"]} · closing: {stages["closing_pairs"]} · '
-        f'future path conflicts: {stages["future_conflicts"]} · '
-        f'zone eligible: {stages["zone_eligible"]} · timing eligible: {stages["timing_eligible"]} · '
-        f'temporally confirmed rows: {stages["temporally_confirmed"]}'
-    )
-    if window_diagnostics:
-        debug_frame = pd.DataFrame(window_diagnostics)
-        preferred_debug = [
-            "timestamp_seconds",
-            "participant_a_track_id",
-            "participant_a_class",
-            "participant_a_observations",
-            "participant_a_velocity_pixels_per_second",
-            "participant_a_predicted_position",
-            "participant_b_track_id",
-            "participant_b_class",
-            "participant_b_observations",
-            "participant_b_velocity_pixels_per_second",
-            "participant_b_predicted_position",
-            "projected_paths_overlap",
-            "time_to_conflict_seconds",
-            "arrival_time_gap_seconds",
-            "inside_conflict_zone",
-            "temporal_confirmation_frames_required",
-            "temporal_confirmation_frames_observed",
-            "temporal_confirmation_met",
-            "rejection_reason",
-        ]
-        visible_debug = [column for column in preferred_debug if column in debug_frame]
-        st.dataframe(debug_frame[visible_debug], use_container_width=True, height=340)
-        st.download_button(
-            "Download debug_conflicts.csv",
-            data=diagnostics_to_csv(window_diagnostics),
-            file_name="debug_conflicts.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-        ranked_diagnostics = sorted(
-            [row for row in window_diagnostics if row.get("participant_a_position")],
-            key=lambda row: (
-                row.get("rejection_reason") not in {"accepted", "accepted_low_uncertainty_margin_only"},
-                float(row.get("path_separation_pixels", 1e9)),
-            ),
-        )[:20]
-        if ranked_diagnostics:
-            diagnostic_labels = [
-                f'{row["timestamp_seconds"]:.3f}s · #{row["participant_a_track_id"]} / '
-                f'#{row["participant_b_track_id"]} · {row["rejection_reason"]}'
-                for row in ranked_diagnostics
-            ]
-            selected_debug_label = st.selectbox(
-                "Visualize a considered vehicle pair", diagnostic_labels
-            )
-            selected_diagnostic = ranked_diagnostics[
-                diagnostic_labels.index(selected_debug_label)
-            ]
-            rejected_frame = frame_at_timestamp(
-                source_path, float(selected_diagnostic["timestamp_seconds"])
-            )
-            for start_key, end_key, color in (
-                ("participant_a_position", "participant_a_predicted_position", (255, 210, 80)),
-                ("participant_b_position", "participant_b_predicted_position", (210, 90, 255)),
-            ):
-                start, end = selected_diagnostic.get(start_key), selected_diagnostic.get(end_key)
-                if start and end:
-                    cv2.arrowedLine(
-                        rejected_frame,
-                        tuple(int(value) for value in start),
-                        tuple(int(value) for value in end),
-                        color,
-                        3,
-                        cv2.LINE_AA,
-                    )
-            point = selected_diagnostic.get("conflict_point")
-            if point:
-                cv2.drawMarker(
-                    rejected_frame,
-                    tuple(int(value) for value in point),
-                    (0, 0, 255),
-                    cv2.MARKER_TILTED_CROSS,
-                    22,
-                    3,
-                )
-            st.image(
-                cv2.cvtColor(rejected_frame, cv2.COLOR_BGR2RGB),
-                caption=f'Reason: {selected_diagnostic["rejection_reason"]}',
-                use_container_width=True,
-            )
-    else:
-        st.info("No simultaneous vehicle-pair evaluations occurred between 0.5 and 3.0 seconds.")
-
-st.divider()
-section_title(5, "Explore Safety Heatmap")
-heatmap_opacity = st.slider("Heatmap opacity", 0.10, 0.90, 0.55, 0.05)
-heatmap_rgb, heatmap_points = build_conflict_heatmap(first_frame, events, heatmap_opacity)
-st.image(
-    heatmap_rgb,
-    caption="Detected potential-conflict concentration on the uploaded intersection frame",
-    use_container_width=True,
-)
-if not heatmap_points:
-    st.info(
-        "No valid event locations are available, so the actual intersection frame is shown "
-        "without fabricated heat coloration."
-    )
-else:
-    hotspot_ids = [str(point["event_id"]) for point in heatmap_points]
-    selected_hotspot = st.selectbox("Inspect hotspot event", hotspot_ids)
-    hotspot_event = next(
-        event for event in events if str(event.get("event_id")) == selected_hotspot
-    )
-    st.caption(
-        f'{selected_hotspot} · {format_timestamp(hotspot_event.get("first_alert_timestamp_seconds"))} · '
-        f'{hotspot_event.get("severity", "—")} · pair {event_pair_key(hotspot_event) or "unavailable"}'
-    )
-
-timeline_figure = conflict_timeline_figure(events)
-if timeline_figure is not None:
-    st.markdown("#### Conflict timeline")
-    st.plotly_chart(timeline_figure, use_container_width=True)
-else:
-    st.info("No detector events are available for the conflict timeline.")
-
-st.divider()
-section_title(6, "Review Flagged Events")
-review_key = f"event_reviews_{video_hash}"
-st.session_state.setdefault(review_key, {})
-review_labels: dict[str, str] = st.session_state[review_key]
-for event in events:
-    review_labels.setdefault(str(event.get("event_id")), "Uncertain")
-
-if not events:
-    st.info("No flagged events are available for human review.")
-else:
-    review_rows = []
-    for event in events:
-        event_id = str(event.get("event_id"))
-        review_rows.append(
-            {
-                "event_id": event_id,
-                "first_alert": format_timestamp(event.get("first_alert_timestamp_seconds")),
-                "vehicle_ids": event_pair_key(event),
-                "classes": f'{event.get("participant_a_class", "—")} / {event.get("participant_b_class", "—")}',
-                "risk": event.get("severity"),
-                "conflict_location": event.get("conflict_point"),
-                "arrival_gap_seconds": event.get("arrival_time_gap_seconds"),
-                "review_status": review_labels[event_id],
-                "explanation": event.get("description"),
-            }
-        )
-    st.dataframe(pd.DataFrame(review_rows), use_container_width=True, height=260)
-    selected_event_id = st.selectbox(
-        "Select an event for evidence review", [row["event_id"] for row in review_rows]
-    )
-    selected_event = next(
-        event for event in events if str(event.get("event_id")) == selected_event_id
-    )
-    evidence_columns = st.columns([1.1, 1.9])
-    with evidence_columns[0]:
-        st.markdown(f"#### {selected_event_id}")
-        st.write(
-            f"First alert: {format_timestamp(selected_event.get('first_alert_timestamp_seconds'))}  \n"
-            f"Vehicles: {event_pair_key(selected_event) or 'unavailable'}  \n"
-            f"Classes: {selected_event.get('participant_a_class', '—')} / "
-            f"{selected_event.get('participant_b_class', '—')}  \n"
-            f"Risk: {selected_event.get('severity', '—')}  \n"
-            f"Arrival gap: {selected_event.get('arrival_time_gap_seconds', '—')} s  \n"
-            f"Conflict location: {selected_event.get('conflict_point', '—')}"
-        )
-        st.caption(str(selected_event.get("description", "No explanation supplied.")))
-        options = ["Confirmed potential conflict", "False positive", "Uncertain"]
-        current_status = review_labels.get(selected_event_id, "Uncertain")
-        selected_status = st.radio(
-            "Human review label",
-            options,
-            index=options.index(current_status) if current_status in options else 2,
-            key=f"review_status_{video_hash}_{selected_event_id}",
-        )
-        review_labels[selected_event_id] = selected_status
-    with evidence_columns[1]:
-        alert_time = float(
-            selected_event.get(
-                "first_alert_timestamp_seconds", selected_event.get("timestamp_seconds", 0.0)
-            )
-        )
-        evidence_frame = frame_at_timestamp(source_path, alert_time)
-        st.image(
-            cv2.cvtColor(evidence_frame, cv2.COLOR_BGR2RGB),
-            caption=f"Actual source frame at {format_timestamp(alert_time)}",
-            use_container_width=True,
-        )
-        evidence_clip = extract_event_clip(
-            artifacts, selected_event_id, alert_time, before_seconds=2.0, after_seconds=2.0
-        )
-        st.video(str(evidence_clip))
-        st.caption("Actual source footage: approximately 2 seconds before and after the first alert.")
-
-st.divider()
-section_title(7, "Generate Safety Report")
-report_state_key = f"safety_report_{video_hash}"
-if st.button("Generate Safety Report", type="primary", use_container_width=True):
-    try:
-        report_frames = {}
-        for event in events:
-            event_id = str(event.get("event_id"))
-            alert_time = float(
-                event.get("first_alert_timestamp_seconds", event.get("timestamp_seconds", 0.0))
-            )
-            report_frames[event_id] = cv2.cvtColor(
-                frame_at_timestamp(source_path, alert_time), cv2.COLOR_BGR2RGB
-            )
-        st.session_state[report_state_key] = generate_safety_report(
-            source_filename=uploaded.name,
-            duration_seconds=metadata.duration_seconds,
-            tracks=tracks,
+        annotated_path = render_annotated_video(
+            artifacts,
+            tracks,
+            applied_zone,
+            trail_length=tracking_config.trail_length,
+            progress=progress_callback(annotation_progress),
             events=events,
-            heatmap_rgb=heatmap_rgb,
-            review_labels=review_labels,
-            event_frames=report_frames,
+            incidents=incidents,
+            show_boxes=show_boxes,
+            show_trajectories=show_trajectories,
+            show_track_ids=show_track_ids,
         )
-        st.success("Safety report generated from the current processed results.")
-    except (RuntimeError, VideoError, ValueError) as exc:
-        st.error(f"Safety report could not be generated: {exc}")
-if report_state_key in st.session_state:
-    st.download_button(
-        "Download Intersection Safety Report PDF",
-        data=st.session_state[report_state_key],
-        file_name="nearmiss_intersection_safety_report.pdf",
-        mime="application/pdf",
-        use_container_width=True,
+    except VideoError as exc:
+        annotation_progress.empty()
+        st.error(str(exc))
+        st.stop()
+    annotation_progress.empty()
+    st.video(str(annotated_path))
+    st.caption("Amber/coral marks are provisional computer-vision evidence, not verified collisions.")
+
+    section_header("Summary")
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Vehicles", statistics["vehicles_tracked"])
+    metric_cols[1].metric("Potential conflicts", statistics["total_conflicts"])
+    metric_cols[2].metric("Suspected incidents", len(incidents))
+    metric_cols[3].metric("Footage analyzed", format_timestamp(metadata.duration_seconds))
+
+    section_header("Timeline", "One marker per continuous vehicle interaction.")
+    timeline = conflict_timeline_figure(events)
+    if timeline is None:
+        empty_state("No potential conflicts", "No qualifying warning was found with the current settings.")
+    else:
+        st.plotly_chart(timeline, width="stretch", key=f"timeline_{video_hash}")
+
+    event_tab, map_tab, details_tab = st.tabs(["Events", "Safety map", "Details"])
+    with event_tab:
+        if not events:
+            st.info("No potential conflict events are available.")
+        else:
+            rows = [
+                {
+                    "Time": format_timestamp(event.get("first_alert_timestamp_seconds")),
+                    "Priority": event.get("severity"),
+                    "Vehicles": event_pair_key(event),
+                    "Time gap": event.get("arrival_time_gap_seconds"),
+                    "Why it was flagged": event.get("description"),
+                }
+                for event in events
+            ]
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    with map_tab:
+        opacity = st.slider("Map intensity", 0.10, 0.90, 0.52, 0.05)
+        heatmap_rgb, heatmap_points = build_conflict_heatmap(first_frame, events, opacity)
+        st.image(
+            heatmap_rgb,
+            caption="Concentration of deduplicated potential-conflict locations",
+            width="stretch",
+        )
+        if not heatmap_points:
+            st.info("No event locations are available, so no heat coloration was added.")
+    with details_tab:
+        st.caption(
+            "Image-space measurements are approximate. Perspective, occlusion, lighting, and tracking changes affect results."
+        )
+        risk_cols = st.columns(4)
+        risk_cols[0].metric("High", statistics["high_conflicts"])
+        risk_cols[1].metric("Medium", statistics["medium_conflicts"])
+        risk_cols[2].metric("Low", statistics["low_conflicts"])
+        average_gap = statistics["average_arrival_gap_seconds"]
+        risk_cols[3].metric("Average time gap", "—" if average_gap is None else f"{average_gap:.2f}s")
+        if debug_mode:
+            with st.expander("Technical diagnostics", expanded=False):
+                diagnostics = diagnose_conflicts(tracks_for_detector, analysis_zone, conflict_config)
+                stage_counts = pipeline_stage_counts(diagnostics, events)
+                st.json(stage_counts)
+                if diagnostics:
+                    diagnostic_frame = pd.DataFrame(diagnostics)
+                    st.dataframe(diagnostic_frame, width="stretch", height=320)
+                    st.download_button(
+                        "Download diagnostics CSV",
+                        diagnostics_to_csv(diagnostics),
+                        "debug_conflicts.csv",
+                        "text/csv",
+                    )
+        with st.expander("Tracked object records", expanded=False):
+            if tracks_for_detector:
+                table = pd.DataFrame(tracks_for_detector)
+                table["bbox"] = table["bbox"].apply(json.dumps)
+                table["center"] = table["center"].apply(json.dumps)
+                st.dataframe(table, width="stretch", height=340)
+
+    with st.expander("Report and exports", expanded=False):
+        heatmap_rgb, _ = build_conflict_heatmap(first_frame, events, 0.52)
+        review_key = f"event_reviews_{video_hash}"
+        st.session_state.setdefault(review_key, {})
+        prediction_reviews = st.session_state[review_key]
+        report_key = f"safety_report_{video_hash}"
+        if st.button("Generate safety report", key=f"report_{video_hash}"):
+            report_frames = {
+                str(event.get("event_id")): cv2.cvtColor(
+                    frame_at_timestamp(
+                        source_path,
+                        float(event.get("first_alert_timestamp_seconds", event.get("timestamp_seconds", 0.0))),
+                    ),
+                    cv2.COLOR_BGR2RGB,
+                )
+                for event in events
+            }
+            st.session_state[report_key] = generate_safety_report(
+                source_filename=source_filename,
+                duration_seconds=metadata.duration_seconds,
+                tracks=tracks,
+                events=events,
+                heatmap_rgb=heatmap_rgb,
+                review_labels=prediction_reviews,
+                event_frames=report_frames,
+            )
+            st.success("Safety report is ready.")
+        if report_key in st.session_state:
+            st.download_button(
+                "Download safety report",
+                st.session_state[report_key],
+                "nearmiss_safety_report.pdf",
+                "application/pdf",
+            )
+        reviewed_events = events_with_review_labels(events, prediction_reviews)
+        export_payload = {
+            "schema_version": "1.1",
+            "source_filename": source_filename,
+            "video_sha256": video_hash,
+            "camera_id": camera_id,
+            "video": asdict(metadata),
+            "tracking_config": tracking_config.as_dict(),
+            "conflict_config": conflict_config,
+            "collision_evidence_config": collision_config,
+            "zone_pixels": applied_zone,
+            "zone_normalized": normalized_polygon(applied_zone, metadata.width, metadata.height),
+            "tracks": tracks_for_detector,
+            "events": reviewed_events,
+            "suspected_collisions": incidents,
+            "persistent_incident_reviews": list(persisted_reviews.values()),
+            "simulated_dispatch_notifications": dispatch_notifications,
+        }
+        downloads = st.columns(5)
+        downloads[0].download_button("Tracks CSV", tracks_to_csv(tracks_for_detector), "tracks.csv", "text/csv")
+        downloads[1].download_button("Warnings CSV", events_to_csv(reviewed_events), "warnings.csv", "text/csv")
+        downloads[2].download_button("Incidents CSV", events_to_csv(incidents), "incidents.csv", "text/csv")
+        downloads[3].download_button(
+            "Analysis JSON",
+            json.dumps(export_payload, indent=2, default=json_default),
+            "analysis.json",
+            "application/json",
+        )
+        downloads[4].download_button(
+            "Annotated video",
+            annotated_path.read_bytes(),
+            "nearmiss_annotated.mp4",
+            "video/mp4",
+        )
+
+
+elif navigation == "Incidents":
+    page_header(
+        "Incidents",
+        "Review the evidence",
+        "Open a suspected incident, replay the moment, and record an operator decision.",
     )
+    review_counts = {
+        "Uncertain": sum(incident.get("review_status") == "Uncertain" for incident in incidents),
+        "Confirmed": sum(incident.get("review_status") == "Confirmed Incident" for incident in incidents),
+        "Dismissed": sum(incident.get("review_status") == "False Alarm" for incident in incidents),
+    }
+    count_cols = st.columns(3)
+    count_cols[0].metric("Needs review", review_counts["Uncertain"])
+    count_cols[1].metric("Confirmed", review_counts["Confirmed"])
+    count_cols[2].metric("Dismissed", review_counts["Dismissed"])
 
-st.markdown("### Export results")
-reviewed_events = events_with_review_labels(events, review_labels)
-export_payload = {
-    "schema_version": "1.0",
-    "source_filename": uploaded.name,
-    "video_sha256": video_hash,
-    "video": asdict(metadata),
-    "tracking_config": tracking_config.as_dict(),
-    "conflict_config": conflict_config,
-    "zone_pixels": applied_zone,
-    "analysis_zone_pixels": analysis_zone,
-    "zone_normalized": normalized_polygon(applied_zone, metadata.width, metadata.height),
-    "tracks": tracks_for_detector,
-    "events": reviewed_events,
-    "disclaimer": "Potential conflict flags are heuristic and are not verified accidents or near misses.",
-}
-download_cols = st.columns(4)
-download_cols[0].download_button(
-    "Download tracks CSV",
-    data=tracks_to_csv(tracks_for_detector),
-    file_name="nearmiss_tracks.csv",
-    mime="text/csv",
-    use_container_width=True,
-)
-download_cols[1].download_button(
-    "Download events CSV",
-    data=events_to_csv(reviewed_events),
-    file_name="nearmiss_events.csv",
-    mime="text/csv",
-    use_container_width=True,
-)
-download_cols[2].download_button(
-    "Download analysis JSON",
-    data=json.dumps(export_payload, indent=2, default=json_default),
-    file_name="nearmiss_analysis.json",
-    mime="application/json",
-    use_container_width=True,
-)
-download_cols[3].download_button(
-    "Download annotated MP4",
-    data=annotated_path.read_bytes(),
-    file_name="nearmiss_annotated.mp4",
-    mime="video/mp4",
-    use_container_width=True,
-)
+    section_header("Incident queue", "One row per deduplicated suspected interaction.")
+    if not incidents:
+        empty_state(
+            "No suspected incidents",
+            "The evidence detector did not find a qualifying incident. Nothing has been fabricated for review.",
+        )
+    else:
+        selected_key = f"selected_incident_{video_hash}"
+        st.session_state.setdefault(selected_key, incidents[0]["incident_id"])
+        for incident in incidents:
+            with st.container(border=False):
+                card_cols = st.columns([1.1, 1.3, 3.6, 1.2])
+                card_cols[0].markdown(f"**{format_timestamp(incident['timestamp_seconds'])}**")
+                card_cols[1].markdown(
+                    f"Vehicles **#{incident['vehicle_a_track_id']} / #{incident['vehicle_b_track_id']}**"
+                )
+                card_cols[2].caption(incident["description"])
+                status = incident.get("review_status", "Uncertain")
+                tone = "success" if status == "Confirmed Incident" else "critical" if status == "False Alarm" else "warning"
+                with card_cols[3]:
+                    status_pill("Confirmed" if status == "Confirmed Incident" else "Dismissed" if status == "False Alarm" else "Uncertain", tone)
+                    if st.button("Review", key=f"open_{incident['incident_id']}", width="stretch"):
+                        st.session_state[selected_key] = incident["incident_id"]
+                        st.rerun()
+            st.markdown('<div class="nm-row-separator"></div>', unsafe_allow_html=True)
 
-st.caption(
-    "NearMiss MVP · YOLO detections + ByteTrack identities · All analysis runs locally after model download"
-)
+        selected_id = st.session_state[selected_key]
+        selected_incident = next(
+            (incident for incident in incidents if incident["incident_id"] == selected_id),
+            incidents[0],
+        )
+        section_header("Evidence review")
+        evidence_col, decision_col = st.columns([1.8, 1], gap="large")
+        with evidence_col:
+            impact_time = float(selected_incident["timestamp_seconds"])
+            source_frame = frame_at_timestamp(source_path, impact_time)
+            marked_frame = annotate_incident_frame(source_frame, selected_incident)
+            st.image(
+                cv2.cvtColor(marked_frame, cv2.COLOR_BGR2RGB),
+                caption=f"Source frame · {format_timestamp(impact_time)}",
+                width="stretch",
+            )
+            clip = extract_event_clip(
+                artifacts, selected_incident["incident_id"], impact_time, 2.0, 2.0
+            )
+            st.video(str(clip))
+            st.caption("Replay includes approximately two seconds before and after the suspected impact.")
+        with decision_col:
+            st.markdown(f"### {format_timestamp(selected_incident['timestamp_seconds'])}")
+            st.write(
+                f"Vehicles **#{selected_incident['vehicle_a_track_id']}** and "
+                f"**#{selected_incident['vehicle_b_track_id']}**"
+            )
+            prediction_id = selected_incident.get("associated_prediction_event_id")
+            if prediction_id:
+                status_pill(f"Predicted earlier · {prediction_id}", "warning")
+            else:
+                status_pill("No earlier warning")
+            st.markdown("#### Why it was flagged")
+            for signal in selected_incident["detection_signals"]:
+                st.write(f"• {signal.replace('_', ' ').capitalize()}")
+            st.caption("Choose one operator decision. Only Confirm creates a simulated notification.")
+            if st.button(
+                "Confirm incident",
+                type="primary",
+                key=f"confirm_{selected_id}",
+                width="stretch",
+            ):
+                review_incident(selected_incident, "Confirmed Incident", camera_id)
+                st.toast("Confirmed · simulated dispatch item created")
+                st.rerun()
+            action_cols = st.columns(2)
+            if action_cols[0].button("Dismiss", key=f"dismiss_{selected_id}", width="stretch"):
+                review_incident(selected_incident, "False Alarm", camera_id)
+                st.toast("Incident dismissed")
+                st.rerun()
+            if action_cols[1].button("Uncertain", key=f"uncertain_{selected_id}", width="stretch"):
+                review_incident(selected_incident, "Uncertain", camera_id)
+                st.toast("Saved for further review")
+                st.rerun()
+            with st.expander("Technical evidence", expanded=False):
+                st.json(selected_incident.get("measurements", {}))
 
+    with st.expander("Potential conflict predictions", expanded=False):
+        if not events:
+            st.info("No prediction candidates are available.")
+        else:
+            prediction_rows = [
+                {
+                    "Event": event.get("event_id"),
+                    "Time": format_timestamp(event.get("first_alert_timestamp_seconds")),
+                    "Priority": event.get("severity"),
+                    "Vehicles": event_pair_key(event),
+                    "Arrival gap": event.get("arrival_time_gap_seconds"),
+                }
+                for event in events
+            ]
+            st.dataframe(pd.DataFrame(prediction_rows), width="stretch", hide_index=True)
+
+
+elif navigation == "Dispatch":
+    page_header(
+        "Dispatch",
+        "Verified incident inbox",
+        "Confirmed incidents appear here for acknowledgment. This is a local simulation; nothing is sent externally.",
+    )
+    new_count = sum(notification["status"] == "New" for notification in dispatch_notifications)
+    acknowledged_count = sum(
+        notification["status"] == "Acknowledged" for notification in dispatch_notifications
+    )
+    notify_cols = st.columns(3)
+    notify_cols[0].metric("New", new_count)
+    notify_cols[1].metric("Acknowledged", acknowledged_count)
+    notify_cols[2].metric("Total generated", len(dispatch_notifications))
+
+    section_header("Inbox", "Local simulation only. No external message was sent.")
+    if not dispatch_notifications:
+        empty_state(
+            "Inbox is clear",
+            "Confirm a suspected incident in Review to create a simulated dispatch notification.",
+        )
+        st.button("Open Incidents", type="primary", on_click=queue_page, args=("Incidents",))
+    else:
+        for notification in dispatch_notifications:
+            summary = notification.get("summary", {})
+            with st.container(border=False):
+                header_cols = st.columns([3.4, 1.2])
+                with header_cols[0]:
+                    st.markdown(f"### {notification['notification_id']}")
+                    st.caption(
+                        f"{notification['camera_id']} · Generated {notification['generated_at']}"
+                    )
+                with header_cols[1]:
+                    status_pill(
+                        notification["status"],
+                        "success" if notification["status"] == "Acknowledged" else "warning",
+                    )
+                detail_cols = st.columns(3)
+                detail_cols[0].metric("Video time", format_timestamp(summary.get("timestamp_seconds")))
+                vehicles = summary.get("vehicle_track_ids", [])
+                detail_cols[1].metric(
+                    "Vehicles",
+                    " / ".join(f"#{value}" for value in vehicles if value is not None) or "—",
+                )
+                detail_cols[2].metric("Operator decision", "Confirmed")
+                st.write(
+                    "Evidence: "
+                    + ", ".join(
+                        str(signal).replace("_", " ")
+                        for signal in summary.get("detection_signals", [])
+                    )
+                )
+                st.caption("This record exists only inside NearMiss on this computer.")
+                if notification["status"] != "Acknowledged" and st.button(
+                    "Acknowledge",
+                    key=f"ack_{notification['notification_id']}",
+                    type="primary",
+                ):
+                    acknowledge_notification(notification["notification_id"])
+                    st.toast("Notification acknowledged")
+                    st.rerun()
+            st.markdown('<div class="nm-row-separator"></div>', unsafe_allow_html=True)
+
+
+st.markdown(
+    '<div class="nm-footer">NearMiss · Experimental decision support · '
+    'Not a validated crash detector or emergency-service system</div>',
+    unsafe_allow_html=True,
+)

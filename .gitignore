@@ -10,3 +10,9 @@ __pycache__/
 .venv/
 venv/
 
+
+.scratch/
+**/node_modules/
+presentation/video/.remotion/
+presentation/video/build/
+presentation/video/dist/

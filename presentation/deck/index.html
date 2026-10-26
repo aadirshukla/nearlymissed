@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NearMiss — 3-minute presentation</title>
+  <link rel="stylesheet" href="deck.css" />
+  <!-- Everything below is local. No CDN or network is used at playback. -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="data/demo-metrics.js"></script>
+  <script src="data/brief.js"></script>
+</head>
+<body>
+  <div id="viewport">
+    <div id="stage">
+
+      <!-- 1 · The moment counts (Srivibhav, 15 s) -->
+      <section class="slide" data-id="moment" data-seconds="15" data-speaker="Srivibhav" data-steps="2">
+        <img class="bg-photo" src="assets/hero/nearmiss-hero.jpg" alt="" />
+        <div class="bg-shade"></div>
+        <p class="photo-label">Illustrative image · not analyzed footage</p>
+        <div class="scene-panel" id="s1-panel" data-step="1">
+          <div class="scene-host" id="s1-scene"></div>
+          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag">Scripted tracks · nearmiss/demo.py</span></div>
+          <div class="freeze-note" id="s1-freeze"></div>
+        </div>
+        <div class="hook">
+          <h1 class="hook-1">A near miss disappears <em>in seconds.</em></h1>
+          <h1 class="hook-2" data-step="2"><em>Its evidence shouldn’t.</em></h1>
+        </div>
+      </section>
+
+      <!-- 2 · Purpose and workflow (Srivibhav, 20 s) -->
+      <section class="slide" data-id="purpose" data-seconds="20" data-speaker="Srivibhav" data-steps="3">
+        <img class="bg-photo blurred" src="assets/hero/nearmiss-hero.jpg" alt="" />
+        <div class="bg-shade heavy"></div>
+        <div class="pad">
+          <p class="kicker">What NearMiss does</p>
+          <h2 class="headline">Turns fixed-camera traffic footage into <em class="amber">evidence a person can check.</em></h2>
+          <div class="flow" data-step="1">
+            <div class="flow-track"><div class="flow-token" id="s2-token"></div></div>
+            <div class="flow-step"><span class="num">01</span><b>Predict</b><span>Projects tracked paths and flags potential conflicts.</span></div>
+            <div class="flow-step"><span class="num">02</span><b>Detect</b><span>Separately screens for contact plus a motion response.</span></div>
+            <div class="flow-step coral"><span class="num">03</span><b>Verify</b><span>A person reviews the source frame and clip.</span></div>
+            <div class="flow-step"><span class="num">04</span><b>Notify</b><span>Confirmation creates one local, simulated notice.</span></div>
+          </div>
+          <div class="people" data-step="2">
+            <div><p class="kicker muted">Built by</p><p class="names"><em>Srivibhav Padakandla</em> · <em>Aadi Shukla</em></p></div>
+            <div><p class="kicker muted">Who it is for</p><p class="who">People who review intersections: safety staff, and neighbors preparing a street-safety conversation.</p></div>
+          </div>
+          <p class="synthetic-line" data-step="3"><span class="tag solid">Synthetic demo</span> Every app scene in this talk uses NearMiss’s labeled demo: generated footage, scripted tracks. No real place, no real crash.</p>
+        </div>
+      </section>
+
+      <!-- 3 · How a warning is earned (Srivibhav, 30 s) -->
+      <section class="slide" data-id="earned" data-seconds="30" data-speaker="Srivibhav" data-steps="4">
+        <div class="pad">
+          <p class="kicker">How a warning is earned</p>
+          <h2 class="headline small">Two projected arrival times. <em class="amber">One gap.</em></h2>
+        </div>
+        <div class="earned-scene">
+          <div class="scene-host" id="s3-scene"></div>
+          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag" id="s3-tag"></span></div>
+        </div>
+        <div class="earned-side">
+          <div class="arrivals" data-step="2" id="s3-arrivals"></div>
+          <div class="ruler" data-step="3" id="s3-ruler"></div>
+          <figure class="proof" data-step="4">
+            <div class="crop" style="--img:url(assets/captures/warning.png)"><img src="assets/captures/warning.png" alt="NearMiss 'Why each warning was raised' panel" /></div>
+            <figcaption>Actual app · Analysis → “Why each warning was raised”</figcaption>
+          </figure>
+        </div>
+        <p class="footnote">Image-space pixels and constant-velocity projection. Not a measured speed, distance or collision probability.</p>
+      </section>
+
+      <!-- 4 · Inspect the source (Srivibhav, 25 s) -->
+      <section class="slide" data-id="source" data-seconds="25" data-speaker="Srivibhav" data-steps="3">
+        <div class="pad">
+          <p class="kicker">Inspect the source</p>
+          <h2 class="headline small">Every flag points back to <em class="amber">the exact frame.</em></h2>
+        </div>
+        <div class="source-media">
+          <div class="media-swap">
+            <video id="s4-video" src="assets/clips/demo-annotated.mp4" muted playsinline preload="auto"></video>
+            <div class="investigation" data-step="2">
+              <img src="assets/captures/investigation.png" alt="NearMiss Investigation page at the first alert frame" />
+              <div class="hl" id="s4-hl"></div>
+            </div>
+          </div>
+          <div class="clip-timeline" id="s4-timeline"><div class="bar"><div class="fill" id="s4-fill"></div></div></div>
+          <p class="media-caption" id="s4-caption">Actual NearMiss annotated render of the synthetic demo · click a marker to jump</p>
+        </div>
+        <div class="source-side">
+          <div id="s4-events"></div>
+          <p class="side-note" data-step="3" id="s4-note"></p>
+        </div>
+      </section>
+
+      <!-- 5 · Human review (Aadi, 25 s) -->
+      <section class="slide" data-id="review" data-seconds="25" data-speaker="Aadi" data-steps="3">
+        <div class="pad">
+          <p class="kicker coral">Human review</p>
+          <h2 class="headline small">Contact needs more than overlap. <em class="amber">A person decides.</em></h2>
+        </div>
+        <div class="review-scene">
+          <div class="scene-host" id="s5-scene"></div>
+          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag">Diagram · half speed</span></div>
+          <div class="contact-tag" id="s5-contact"></div>
+        </div>
+        <div class="review-side">
+          <ul class="signals" data-step="1" id="s5-signals"></ul>
+          <div class="decisions" data-step="2">
+            <div class="decision confirm"><b>Confirm</b><span>creates one local, simulated notice</span></div>
+            <div class="decision"><b>Dismiss</b><span>no notice</span></div>
+            <div class="decision"><b>Uncertain</b><span>no notice</span></div>
+          </div>
+          <figure class="proof tall" data-step="3">
+            <div class="crop incidents"><img src="assets/captures/incidents.png" alt="NearMiss Incidents page with review buttons" /></div>
+            <figcaption>Actual app · Incidents (review recorded on the synthetic demo)</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- 6 · Evidence to follow-up (Aadi, 25 s) -->
+      <section class="slide" data-id="followup" data-seconds="25" data-speaker="Aadi" data-steps="2">
+        <div class="pad">
+          <p class="kicker">From evidence to follow-up</p>
+          <h2 class="headline small">One local notice, a plan, and <em class="amber">a brief anyone can check.</em></h2>
+        </div>
+        <div class="follow-grid">
+          <figure class="proof">
+            <div class="crop dispatch"><img src="assets/captures/dispatch.png" alt="NearMiss simulated dispatch inbox" /></div>
+            <figcaption>Actual app · Dispatch · local simulation, nothing sent</figcaption>
+          </figure>
+          <div class="crossing" data-step="1">
+            <p class="mini-title">Street Lab · crossing-time arithmetic</p>
+            <div id="s6-bars"></div>
+            <p class="caveat" id="s6-caveat"></p>
+          </div>
+          <div class="brief" data-step="2">
+            <p class="mini-title">Actual export · evidence brief (.md)</p>
+            <div class="brief-page" id="s6-brief"></div>
+            <p class="caveat">Street Lab’s community brief and the Analysis PDF report are separate exports.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7 · Built, verified, unproven (Aadi, 25 s) -->
+      <section class="slide" data-id="verified" data-seconds="25" data-speaker="Aadi" data-steps="3">
+        <div class="pad">
+          <p class="kicker">What we built · verified · have not proven</p>
+          <h2 class="headline small">Open-source eyes. <em class="amber">Our own judgment layer.</em> <em class="coral">Honest limits.</em></h2>
+        </div>
+        <div class="three-col">
+          <div class="col" data-step="1">
+            <h3 class="amber">Built</h3>
+            <p class="col-sub">Existing open source</p>
+            <ul><li>Ultralytics YOLO: detects road users</li><li>ByteTrack: keeps IDs across frames</li><li>OpenCV, Streamlit, Plotly, ReportLab</li></ul>
+            <p class="col-sub">NearMiss custom logic</p>
+            <ul><li>Trajectory prediction and conflict gates</li><li>Same-direction following check</li><li>Multi-signal suspected-collision detector</li><li>Evidence association and de-duplication</li><li>Review record and simulated dispatch audit trail</li><li>Investigation, briefs, Street Lab, run library</li></ul>
+          </div>
+          <div class="col" data-step="2">
+            <h3 class="green">Verified</h3>
+            <ul id="s7-verified"></ul>
+          </div>
+          <div class="col" data-step="3">
+            <h3 class="coral">Not yet proven</h3>
+            <ul><li>Accuracy on real-world footage has not been measured</li><li>Image pixels only: no calibrated metres, speeds or probabilities</li><li>No crash-reduction or safety-rating claim</li><li>Dispatch is simulated; nothing leaves the computer</li><li>One camera view, short clips</li></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8 · Next pilot (Aadi, 15 s) -->
+      <section class="slide" data-id="pilot" data-seconds="15" data-speaker="Aadi" data-steps="2">
+        <img class="bg-photo" src="assets/hero/nearmiss-hero.jpg" alt="" />
+        <div class="bg-shade heavy"></div>
+        <div class="pad">
+          <p class="kicker">Proposed next step</p>
+          <h2 class="headline small">A supervised pilot <em class="amber">before any claims.</em></h2>
+          <ol class="pilot">
+            <li>Permissioned footage from one fixed camera</li>
+            <li>Compare NearMiss flags with human-labelled events to measure accuracy</li>
+            <li>Calibrate the camera view so pixels can become metres</li>
+          </ol>
+          <div class="credits" data-step="1">
+            <p><b>AI assistance</b> OpenAI Codex and Anthropic Claude (Opus) assisted with writing, reviewing and testing code, and with building this deck. Results shown come from running the app and its tests.</p>
+            <p><b>Open source</b> Ultralytics YOLO · ByteTrack · OpenCV · Streamlit · Plotly · ReportLab · GSAP · Inter, Instrument Serif, JetBrains Mono (OFL)</p>
+          </div>
+          <div class="closing" data-step="2">
+            <p class="close-1">A near miss disappears <em>in seconds.</em> <em class="coral">Its evidence shouldn’t.</em></p>
+            <p class="close-2">NearMiss · Srivibhav Padakandla · Aadi Shukla</p>
+          </div>
+        </div>
+        <p class="photo-label">Illustrative image · not analyzed footage</p>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Presenter chrome (hidden in print) -->
+  <div id="hud" class="no-print">
+    <span id="hud-slide"></span>
+    <span id="hud-step"></span>
+    <span id="hud-timer" title="Elapsed (T resets)"></span>
+    <span id="hud-target"></span>
+    <span id="hud-mode"></span>
+  </div>
+  <div id="rehearsal-bar" class="no-print"><div></div></div>
+  <aside id="notes" class="no-print" aria-live="polite"></aside>
+  <div id="help" class="no-print" hidden>
+    <h3>Keys</h3>
+    <dl>
+      <dt>→ Space PgDn</dt><dd>next reveal, then next slide</dd>
+      <dt>← PgUp</dt><dd>previous reveal / slide</dd>
+      <dt>Shift + → / ←</dt><dd>next / previous slide (final state)</dd>
+      <dt>1–8 · Home · End</dt><dd>jump to slide</dd>
+      <dt>F</dt><dd>fullscreen</dd>
+      <dt>N</dt><dd>presenter notes</dd>
+      <dt>T</dt><dd>reset elapsed timer</dd>
+      <dt>R</dt><dd>auto-rehearsal (180 s, timed to the plan)</dd>
+      <dt>M</dt><dd>toggle reduced motion</dd>
+      <dt>A</dt><dd>replay this slide’s animation</dd>
+      <dt>?</dt><dd>this help</dd>
+    </dl>
+    <p>Print (Ctrl/Cmd+P) or open <code>index.html?print</code> for the eight final-state pages.</p>
+  </div>
+  <script src="notes.js"></script>
+  <script src="scenes.js"></script>
+  <script src="deck.js"></script>
+</body>
+</html>

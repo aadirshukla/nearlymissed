@@ -1,0 +1,15 @@
+{
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "durationInFrames": 4950,
+  "scenes": [
+    {"id": "hook", "from": 0, "to": 360, "label": "The moment"},
+    {"id": "purpose", "from": 360, "to": 810, "label": "Purpose"},
+    {"id": "app", "from": 810, "to": 2160, "label": "Warning to source"},
+    {"id": "review", "from": 2160, "to": 3150, "label": "Human review"},
+    {"id": "streetlab", "from": 3150, "to": 3900, "label": "Follow-up"},
+    {"id": "build", "from": 3900, "to": 4590, "label": "Built and verified"},
+    {"id": "close", "from": 4590, "to": 4950, "label": "Credits and next"}
+  ]
+}

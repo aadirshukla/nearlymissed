@@ -1,0 +1,36 @@
+{
+  "name": "nearmiss-demo-video",
+  "private": true,
+  "version": "1.0.0",
+  "description": "NearMiss 165-second challenge video (Remotion). Text and music, no voice.",
+  "type": "module",
+  "scripts": {
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "studio": "npm run prepare-assets && remotion studio src/index.ts",
+    "stills": "npm run prepare-assets && node scripts/render-stills.mjs",
+    "render": "npm run prepare-assets && node scripts/render.mjs",
+    "render:draft": "npm run prepare-assets && node scripts/render.mjs --allow-missing",
+    "render:isolated": "node scripts/render-isolated.mjs",
+    "check": "node scripts/check.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --max-warnings=0 src"
+  },
+  "dependencies": {
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@remotion/cli": "4.0.538",
+    "@remotion/fonts": "^4.0.538",
+    "@remotion/media-utils": "^4.0.538",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.538"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "@typescript-eslint/parser": "^8.72.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "typescript": "5.8.3"
+  }
+}

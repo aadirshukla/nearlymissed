@@ -1,0 +1,4 @@
+node_modules/
+video/.remotion/
+video/out/
+.DS_Store

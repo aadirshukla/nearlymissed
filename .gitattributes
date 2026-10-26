@@ -1,0 +1,9 @@
+*.pdf binary
+*.mp4 binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.ttf binary
+presentation/deck/vendor/* -whitespace
+**/OFL-*.txt -whitespace

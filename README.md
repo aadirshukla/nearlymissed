@@ -176,9 +176,9 @@ Nested evidence is preserved in CSV/JSON exports.
 .venv/bin/python -m pytest -q
 ```
 
-Latest verified local result (2026-10-25, after merging `origin/main`):
-**170 passed** (including Streamlit AppTest walk-throughs of the guided demo,
-Library, Investigation and the photo landing page). Browser checks at desktop
+Latest verified local result (2026-10-25, America/Los_Angeles):
+**237 passed**, including comparison regressions, Presenter Mode navigation,
+Streamlit AppTest walk-throughs, and the photo landing page. Browser checks at desktop
 1280 px and mobile 390 px were performed by the host session, not by the test
 suite. The earlier 2026-10-24 baseline was 35. A fresh end-to-end
 run of `01_Accident_001.mp4` at confidence 0.31 processed 224 frames into 504
@@ -251,6 +251,19 @@ guided demo.
   participants.
 - **Explain & Share** explains one flagged moment and exports a Markdown brief.
 - **Library** saves footage-free run snapshots and compares them.
+
+## Presentation package
+
+The eight-slide animated browser deck, speaker notes, PDF backup, and editable
+165-second Remotion video project live in `presentation/`. See
+[the presentation guide](docs/presentation-guide.md) for rehearsal and rendering.
+The deck assigns slides 1–4 to Srivibhav Padakandla and slides 5–8 to Aadi Shukla;
+speaking assignments do not assert individual technical authorship.
+
+The Overview traffic story labels its animation as illustrative. Presenter Mode
+uses the actual demo evidence and never changes review decisions. The Library
+threshold comparison holds footage, tracks, and zone fixed while changing one
+arrival-gap threshold; warning counts measure sensitivity, not road safety.
 
 ## Limitations
 

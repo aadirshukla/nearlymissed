@@ -1,0 +1,12 @@
+{
+  "music": {
+    "file": "music/traffic-bed.mp3",
+    "duration": 353.498889,
+    "title": "Signal to Noise",
+    "artist": "Scott Buckley"
+  },
+  "licenceFiles": [
+    "LICENSE.txt"
+  ],
+  "licenceText": "Signal to Noise by Scott Buckley\nSource: https://www.scottbuckley.com.au/library/signal-to-noise/\nAudio: https://www.scottbuckley.com.au/library/wp-content/uploads/2020/04/sb_signaltonoise.mp3\nLicense: Creative Commons Attribution 4.0 International\nhttps://creativecommons.org/licenses/by/4.0/\nRequired credit: 'Signal to Noise' by Scott Buckley - released under CC-BY 4.0. www.scottbuckley.com.au\nFor any YouTube publication, include this credit in the video description.\nEdited to 165 seconds with fade-in/fade-out and volume adjustment for the NearMiss demonstration.\nSource/license verified 2026-10-25."
+}

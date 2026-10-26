@@ -1,0 +1,80 @@
+{
+  "verified_at": "2026-10-26T02:06:24.094237+00:00",
+  "source_commit": "a46169f7e3e4d434d527126ed8fed9968ff9a7e0",
+  "tests": "237 passed",
+  "deck": {
+    "slides": 8,
+    "scheduled_seconds": 180,
+    "behavior_tests": 6
+  },
+  "video_stream_sha256": "287abaa57f676717d022bbe1b2b1beda127382af69635080520a9e2aed473ca4",
+  "soundtrack_mean_db": -24.7,
+  "soundtrack_peak_db": -7.3,
+  "files": {
+    "NearMiss-demo.mp4": {
+      "bytes": 30731875,
+      "sha256": "71b5460d100ba64897e9f1bc47550bc30bca9ba674e777da41c2f1613cd0e7bc",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "duration": "165.000000",
+            "nb_frames": "4950",
+            "side_data_list": [
+              {}
+            ]
+          },
+          {
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "r_frame_rate": "0/0",
+            "duration": "165.013000",
+            "nb_frames": "7737"
+          }
+        ],
+        "format": {
+          "duration": "165.013000"
+        }
+      }
+    },
+    "NearMiss-demo-silent.mp4": {
+      "bytes": 26702052,
+      "sha256": "23b8ed24a5623b4daafc28842d98277f8b3f4a23b7678e383c8692edda63cb84",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "duration": "165.000000",
+            "nb_frames": "4950",
+            "side_data_list": [
+              {}
+            ]
+          }
+        ],
+        "format": {
+          "duration": "165.000000"
+        }
+      }
+    },
+    "NearMiss-demo-poster.png": {
+      "bytes": 2418283,
+      "sha256": "509ff169ac48f28a8585fb588bd57e24ef6127a4be78f74a28359ece27b140d7"
+    },
+    "NearMiss-deck.pdf": {
+      "bytes": 1323870,
+      "sha256": "3f338abcd90ad28e8705d2724b30fa8dfd7d3b784a1e861d44a668b50dfea2bf"
+    }
+  }
+}

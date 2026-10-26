@@ -10,12 +10,13 @@ the app:
 
 Credits, licences and provenance: `docs/creative-credits.md`.
 
-**Video status:** the video renders have **not** been produced by this source
-pass. The host renders them and checks them (see "Render the video").
+**Final exports verified (2026-10-25, America/Los_Angeles):** soundtrack and silent MP4s are rendered at 1920×1080, 30 fps, 4,950 frames: exactly 165 seconds of video. The soundtrack container lasts 165.013 seconds because of AAC padding; the silent container lasts 165.000 seconds. Both video streams have the same SHA-256. The soundtrack has nonzero audio (mean −24.7 dB, peak −7.3 dB); the backup has no audio stream. See `presentation/exports/verification.json`.
+
+The final MP4 was opened for playback, and the browser deck and eight-page PDF were inspected. Copyable speaking notes: `presentation/speaker-notes.md`.
 
 ## Reproduce everything
 
-All commands start from the repo root unless a `cd` is shown.
+All commands start from the repo root unless a `cd` is shown. Install Python requirements into `.venv`, and have Node.js, npm and FFmpeg available. On a fresh checkout, run `npm ci` once in each of `presentation/video/` and `presentation/deck/`. The exported MP4/PDF and bundled browser deck work without the authoring dependencies.
 
 ```sh
 # 1. Facts from the synthetic demo pipeline (+ full pytest run for slide 7).
@@ -54,7 +55,7 @@ REMOTION_BROWSER_EXECUTABLE=/path/to/chrome npm run render:isolated   # env var 
 (output `<cache>/exports`, ending with `scripts/check.mjs`: 1920x1080, 30 fps,
 4950 frames, audio only in the soundtrack file), and only then copies the three
 files back to `presentation/exports/`. A draft render (missing capture) is
-never copied. This wrapper has not been run by the source pass.
+never copied. The host used the same prepared-copy → isolated render → check → copy-back flow for the final export. The optional wrapper was syntax-checked and independently reviewed; it was not separately used for a second full render.
 
 Music file: `presentation/video/public/music/traffic-bed.mp3` ("Signal to
 Noise", Scott Buckley, CC BY 4.0; first 165 s, 1.5 s fade-in, 4 s fade-out,
@@ -80,8 +81,7 @@ shows all eight final states for printing.
 
 Timing notes:
 
-- The elapsed timer starts on the first reveal, by key **or** click, and not
-  on page load. Press T to restart it.
+- The elapsed timer waits on page load and starts when you interact with the presentation, including a key or click reveal. Press T to restart it, or R to run the scheduled rehearsal.
 - Auto-rehearsal (R) spaces reveals evenly within each slide's window. If the
   tab was in the background (or keys were pressed), the next frame restores the
   exact scheduled slide and reveal without animation. It clears REHEARSAL at 3:00.
@@ -138,11 +138,8 @@ Done and checked in this pass (Claude Opus `claude-opus-5-5`):
 6. **Credits:** AI assistance itemised; music credit and OFL notices kept; no
    voice; hero image origin marked unverified.
 7. **PDF:** `presentation/exports/NearMiss-deck.pdf`, 8 pages, built by
-   `deck/tools/build_pdf.py` with the band check passing. The host should
-   still open and inspect it.
+   `deck/tools/build_pdf.py` with the band check passing. The host opened and inspected it after generation.
 8. **Wrapper:** `video/scripts/render-isolated.mjs` (`npm run render:isolated`),
    syntax-checked only.
 
-Not done here: no video render, no stills, no browser check of the deck. HTML
-slide heights were estimated from the same TTF metrics, not measured in a
-browser. `presentation/exports/stills/` is empty.
+The source pass did not render or browse. Host acceptance then inspected corrected deck slides, notes, reduced motion, pointer timer behavior, PDF pages, and representative video frames; rendered the final video in the isolated build folder; checked both exports; and opened the final MP4. Extra QA stills remain in the host scratch folder rather than the delivery package.

@@ -83,7 +83,7 @@ synthetic label. Changes are worded by direction ("33.3% less time",
   warning's first alert (conflict-001 at 0:02.8, the same time Analysis
   shows). The tracks named in that record are selected, so the evidence table
   lists it. Boxes are stored observations on the source frame.
-- **Explain & Share**: per-record evidence brief (Markdown/PDF/JSON) carrying
+- **Explain & Share**: per-record evidence brief (Markdown) carrying
   the review status and synthetic label.
 - **Library**: save the current run to compare runs later. Only summaries and
   settings are stored, never footage. If you change a threshold while on the

@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw
 
 from conflict_detector import detect_conflicts, diagnose_conflicts
 import nearmiss.store as store_module
-from nearmiss import streetlab
+from nearmiss import motion, presenter, streetlab
 from nearmiss.config import DEFAULT_CONFLICT_CONFIG, TrackingConfig
 from nearmiss.demo import (
     DEMO_CAMERA_ID,
@@ -257,6 +257,10 @@ def apply_styles() -> None:
         /* Text below the photograph sits on an opaque panel for legibility. */
         .st-key-overview_explainer {{ background:var(--nm-bg); max-width:1180px; margin:0 auto;
           padding:1rem 3rem 5rem; border-radius:10px 10px 0 0; }}
+        /* The story's diagram is position:sticky inside its component; keep every
+           wrapper between it and the page scroller from clipping. */
+        .st-key-overview_explainer, .st-key-overview_explainer [data-testid="stVerticalBlock"],
+        .st-key-overview_explainer [data-testid="stElementContainer"] {{ overflow:visible !important; }}
         .nm-file-meta-item {{ border-top:1px solid var(--nm-border); padding-top:.75rem; min-width:0; }}
         .nm-file-meta-label {{ color:#8A847E; font-size:.7rem; margin-bottom:.28rem; }}
         .nm-file-meta-value {{ color:#E7E5E4; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
@@ -662,6 +666,19 @@ def start_demo() -> None:
     st.session_state["_next_page"] = "Analysis"
 
 
+def open_presenter() -> None:
+    """Enter Presenter mode on the active footage, or on the guided demo."""
+
+    current = st.session_state.get("active_video")
+    return_page = st.session_state.get("navigation", "Overview")
+    if not current or not Path(current["source_path"]).exists():
+        start_demo()
+        if "_demo_error" in st.session_state:
+            return
+        return_page = st.session_state.get("_next_page", "Analysis")
+    presenter.enter(st.session_state, return_page=return_page)
+
+
 def leave_demo() -> None:
     """Return to uploaded footage (the previous upload when there was one)."""
 
@@ -714,13 +731,14 @@ if "_next_page" in st.session_state:
     st.session_state["navigation"] = legacy_navigation.get(requested_page, requested_page)
 if "_toast" in st.session_state:
     st.toast(st.session_state.pop("_toast"))
+presenting = presenter.is_active(st.session_state)
 
 active_video = st.session_state.get("active_video")
 active_is_demo = bool(active_video) and is_demo_video_id(active_video.get("video_hash"))
 if active_is_demo and not Path(active_video["source_path"]).exists():
     # The processed-video cache was cleared; regenerate the deterministic demo.
     active_video = st.session_state["active_video"] = demo_active_video()
-if st.session_state["navigation"] == "Overview" and not (
+if st.session_state["navigation"] == "Overview" and not presenting and not (
     active_video and Path(active_video["source_path"]).exists()
 ):
     # Full-photo landing only; pages with evidence keep the dark interface.
@@ -738,8 +756,22 @@ with st.sidebar:
         PAGES,
         key="navigation",
         label_visibility="collapsed",
+        # Choosing any page is also the way out of Presenter mode.
+        on_change=presenter.stop,
+        args=(st.session_state,),
     )
     st.markdown("<div style='height:.75rem'></div>", unsafe_allow_html=True)
+    if presenting:
+        st.button(
+            "Exit presenter mode", key="presenter_exit_sidebar", on_click=presenter.leave,
+            args=(st.session_state,), width="stretch",
+        )
+    else:
+        st.button(
+            "Presenter mode", key="presenter_open_sidebar", on_click=open_presenter, width="stretch",
+            help="Five keyboard-driven steps: warning, source frame, incident review, Street Lab "
+            "and exported brief. Uses the guided demo when no footage is open. Read-only.",
+        )
 
     with st.expander("Advanced settings", expanded=False):
         if active_is_demo:
@@ -871,7 +903,7 @@ def render_pipeline_explainer() -> None:
     )
 
 
-if navigation == "Overview":
+if navigation == "Overview" and not presenting:
     if "_demo_error" in st.session_state:
         st.error(f"The synthetic demo could not be generated: {st.session_state.pop('_demo_error')}")
 
@@ -950,6 +982,13 @@ if navigation == "Overview":
 
     if not active_video or not Path(active_video["source_path"]).exists():
         with st.container(key="overview_explainer"):
+            story = motion.demo_story(conflict_config, collision_config)
+            if story is not None:
+                motion.render_story(story)
+                st.button(
+                    "Present this walkthrough", key="presenter_open_story", on_click=open_presenter,
+                    help="Opens Presenter mode on the guided demo. Use ← and → to move between steps.",
+                )
             render_pipeline_explainer()
         st.stop()
 
@@ -1019,7 +1058,8 @@ if navigation == "Overview":
     st.stop()
 
 
-if navigation == "Library":
+threshold_box = None
+if navigation == "Library" and not presenting:
     page_header(
         "Library",
         "Saved analyses",
@@ -1052,10 +1092,19 @@ if navigation == "Library":
         current_snapshot=snapshot,
         database_path=store_module.DEFAULT_DATABASE_PATH,
     )
-    st.stop()
+    if active_video and Path(active_video["source_path"]).exists():
+        # Contained and collapsed; only an open box runs the analysis below.
+        threshold_box = st.expander(
+            "Explore one threshold", key="library_threshold", on_change="rerun"
+        )
+    if threshold_box is None or not threshold_box.open:
+        st.stop()
 
 
 if not active_video or not Path(active_video["source_path"]).exists():
+    if presenting:
+        presenter.render_unavailable("The footage for Presenter mode is no longer available.")
+        st.stop()
     page_header(navigation, "No footage selected", "Choose a source video, or start the guided demo.")
     empty_state("Footage required", "Upload an MP4 on Overview, or open the labeled synthetic demo.")
     cols = st.columns([1, 1, 3])
@@ -1089,6 +1138,15 @@ artifacts = cached_analysis(
     initial_metadata,
 )
 if artifacts is None:
+    if presenting:
+        presenter.render_unavailable(
+            "This footage has not been analyzed with the current settings. Return to the "
+            "workspace and select Analyze footage on Overview, then present again."
+        )
+        st.stop()
+    if threshold_box is not None:
+        threshold_box.info("Analyze this footage with the current settings before comparing thresholds.")
+        st.stop()
     page_header(navigation, "Analysis is not ready", "This footage has not been processed with the current settings.")
     empty_state(
         "Analysis required",
@@ -1142,32 +1200,35 @@ for incident in incidents:
     incident["data_source"] = source_kind
 dispatch_notifications = list_notifications(video_hash)
 statistics = safety_statistics(tracks, events, metadata.duration_seconds)
-try:
-    st.session_state["history_current_snapshot"] = build_analysis_snapshot(
-        video_sha256=video_hash,
-        source_name=source_filename,
-        camera_label=camera_id,
-        source_kind=source_kind,
-        duration_seconds=metadata.duration_seconds,
-        tracks=tracks_for_detector,
-        events=events,
-        incidents=incidents,
-        tracking_config=DEMO_TRACKING_CONFIG if active_is_demo else tracking_config,
-        conflict_config=conflict_config,
-        collision_config=collision_config,
-        zone_pixels=applied_zone,
-        video_metadata=asdict(metadata),
-    )
-    st.session_state["history_current_fingerprint"] = analysis_settings_fingerprint(
-        video_hash,
-        DEMO_TRACKING_CONFIG if active_is_demo else tracking_config,
-        conflict_config,
-        collision_config,
-        applied_zone,
-    )
-except ValueError:
-    st.session_state.pop("history_current_snapshot", None)
-    st.session_state.pop("history_current_fingerprint", None)
+# The Library compares against the snapshot it already validated; rebuilding it
+# there would silently clear its "open Analysis to recompute" notice.
+if threshold_box is None:
+    try:
+        st.session_state["history_current_snapshot"] = build_analysis_snapshot(
+            video_sha256=video_hash,
+            source_name=source_filename,
+            camera_label=camera_id,
+            source_kind=source_kind,
+            duration_seconds=metadata.duration_seconds,
+            tracks=tracks_for_detector,
+            events=events,
+            incidents=incidents,
+            tracking_config=DEMO_TRACKING_CONFIG if active_is_demo else tracking_config,
+            conflict_config=conflict_config,
+            collision_config=collision_config,
+            zone_pixels=applied_zone,
+            video_metadata=asdict(metadata),
+        )
+        st.session_state["history_current_fingerprint"] = analysis_settings_fingerprint(
+            video_hash,
+            DEMO_TRACKING_CONFIG if active_is_demo else tracking_config,
+            conflict_config,
+            collision_config,
+            applied_zone,
+        )
+    except ValueError:
+        st.session_state.pop("history_current_snapshot", None)
+        st.session_state.pop("history_current_fingerprint", None)
 
 if detector_error:
     st.error(f"Prediction analysis failed: {detector_error}")
@@ -1192,7 +1253,24 @@ def event_option_label(event: dict) -> str:
     )
 
 
-if navigation == "Analysis":
+if presenting:
+    presenter.render_presenter(
+        source_path=source_path,
+        metadata=metadata,
+        tracks=tracks,
+        events=events,
+        incidents=incidents,
+        reviews=persisted_reviews,
+        notifications=dispatch_notifications,
+        provenance=provenance,
+        source_name=source_filename,
+        video_id=video_hash,
+        source_kind=source_kind,
+        conflict_config=conflict_config,
+    )
+
+
+elif navigation == "Analysis":
     page_header(
         "Analysis",
         "Playback with context",
@@ -1904,6 +1982,23 @@ elif navigation == "Street Lab":
     )
     if active_is_demo:
         demo_controls(video_hash, "streetlab")
+
+
+elif threshold_box is not None:
+    # Owned by nearmiss.comparison_ui (see docs/comparison-integration.md).
+    # Imported only when the box is open; failures surface rather than hide.
+    from nearmiss.comparison_ui import render_comparison
+
+    with threshold_box:
+        render_comparison(
+            tracks=tracks_for_detector,
+            events=events,
+            cfg=conflict_config,
+            zone_polygon=analysis_zone,
+            frame_size=(metadata.width, metadata.height),
+            data_source=source_kind,
+            video_id=video_hash,
+        )
 
 
 st.markdown(

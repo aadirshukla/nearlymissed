@@ -852,18 +852,24 @@ export default function (component) {
     const clock = stage.querySelector('[data-clock]');
     if (clock) clock.textContent = `t = ${(f / data.fps).toFixed(2)} s · frame ${f}`;
   };
+  // Overlays (projected paths, contact marker) belong to one stored frame, so
+  // they are shown only once the drawn frame has arrived at that frame.
+  const arrive = (chapter) => {
+    draw(chapter.frame);
+    stage.setAttribute('data-layers', chapter.layers.join(' '));
+  };
   const goTo = (chapter) => {
     cancelAnimationFrame(raf);
     if (!enabled) return;
-    stage.setAttribute('data-layers', chapter.layers.join(' '));
     const from = current, to = chapter.frame;
-    if (reduced() || from === to) { draw(to); return; }
+    if (reduced() || from === to) { arrive(chapter); return; }
+    stage.setAttribute('data-layers', '');
     const duration = Math.min(2400, Math.max(500, (Math.abs(to - from) / data.fps) * 1000));
     const started = performance.now();
     const step = (now) => {
       const p = Math.min(1, (now - started) / duration);
-      draw(Math.round(from + (to - from) * p));
-      if (p < 1) raf = requestAnimationFrame(step);
+      if (p < 1) { draw(Math.round(from + (to - from) * p)); raf = requestAnimationFrame(step); }
+      else arrive(chapter);
     };
     raf = requestAnimationFrame(step);
   };
@@ -876,7 +882,7 @@ export default function (component) {
   const syncReduced = () => {
     root.classList.toggle('is-reduced', reduced());
     if (toggle) toggle.setAttribute('aria-pressed', String(reduced()));
-    if (enabled && reduced() && activeId) { cancelAnimationFrame(raf); draw(byId.get(activeId).frame); }
+    if (enabled && reduced() && activeId) { cancelAnimationFrame(raf); arrive(byId.get(activeId)); }
   };
   const onToggle = () => {
     userReduced = !reduced();

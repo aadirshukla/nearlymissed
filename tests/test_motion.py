@@ -242,3 +242,83 @@ def test_playback_is_gated_on_the_desktop_breakpoint():
     assert "wide.removeEventListener('change', onWidth)" in js
     disable = js[js.index("const disable"):js.index("const onWidth")]
     assert "cancelAnimationFrame(raf)" in disable and "observer.disconnect()" in disable
+
+
+def test_frame_bound_overlays_appear_only_once_the_frame_arrives():
+    """Back-scrolling Verify -> Predict must not show frame-140 paths over frames 154..141."""
+
+    js = motion.STORY_JS
+    go_to = js[js.index("const goTo"):js.index("const activate")]
+    arrive = js[js.index("const arrive"):js.index("const goTo")]
+    # Layers are set only in arrive(), right after drawing the target frame.
+    assert arrive.index("draw(chapter.frame)") < arrive.index("setAttribute('data-layers', chapter.layers")
+    assert "chapter.layers" not in go_to
+    # While frames move, every overlay is hidden; the tween ends by arriving.
+    assert go_to.index("setAttribute('data-layers', '')") < go_to.index("requestAnimationFrame(step)")
+    assert "else arrive(chapter)" in go_to and "arrive(chapter); return;" in go_to
+    # Switching to reduced motion mid-transition also lands on frame plus overlays together.
+    sync = js[js.index("const syncReduced"):js.index("const onToggle")]
+    assert "arrive(byId.get(activeId))" in sync
+    # The stage CSS hides overlays when no layer is named.
+    assert ".nm-scene[data-stage] .layer { opacity:0; }" in motion.STORY_CSS
+
+
+HARNESS = r"""
+import run from './story.mjs';
+const story = JSON.parse(process.argv[2]);
+const el = () => { const attrs = {}; return { attrs, dataset: {}, hidden: true, textContent: '',
+  classList: { toggle() {}, add() {}, remove() {} },
+  setAttribute(k, v) { attrs[k] = String(v); }, removeAttribute(k) { delete attrs[k]; },
+  addEventListener() {}, removeEventListener() {} }; };
+const stage = el(); const clock = el(); const parts = {};
+stage.querySelector = (sel) => sel === '[data-clock]' ? clock : (parts[sel] ||= el());
+const chapters = story.chapters.map((c) => { const s = el(); s.dataset.chapter = c.id; return s; });
+const root = el();
+root.querySelector = (sel) => sel.startsWith('svg') ? stage : null;
+root.querySelectorAll = () => chapters;
+let observe; let now = 0; let queue = [];
+globalThis.window = { matchMedia: (q) => ({ matches: q.includes('min-width'), addEventListener() {}, removeEventListener() {} }),
+  localStorage: { getItem: () => null, setItem() {} } };
+globalThis.IntersectionObserver = class { constructor(cb) { observe = cb; } observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = (f) => { queue.push(f); return queue.length; };
+globalThis.cancelAnimationFrame = () => { queue = []; };
+globalThis.performance = { now: () => now };
+run({ data: story, parentElement: { querySelector: () => root } });
+const log = [];
+const record = () => log.push([Number(clock.textContent.split('frame ')[1]), stage.attrs['data-layers'] || '']);
+const visit = (id) => {
+  observe([{ isIntersecting: true, target: chapters.find((c) => c.dataset.chapter === id) }]); record();
+  while (queue.length) { const f = queue.shift(); now += 16; f(now); record(); }
+};
+for (const id of process.argv.slice(3)) visit(id);
+console.log(JSON.stringify(log));
+"""
+
+
+def test_stage_script_never_shows_overlays_on_other_frames(story, tmp_path):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed; the structural guard above still applies.")
+    (tmp_path / "story.mjs").write_text(motion.STORY_JS, encoding="utf-8")
+    (tmp_path / "harness.mjs").write_text(HARNESS, encoding="utf-8")
+    data = motion.animation_data(story)
+    order = ["observe", "predict", "verify", "predict", "observe"]  # includes back-scroll
+    result = subprocess.run(
+        [node, str(tmp_path / "harness.mjs"), json.dumps(data), *order],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    log = json.loads(result.stdout)
+    frames = {item["id"]: item["frame"] for item in data["chapters"]}
+    assert any(layers == "" for _frame, layers in log)  # overlays hidden mid-transition
+    for frame, layers in log:
+        if "predict" in layers.split():
+            assert frame == frames["predict"], (frame, layers)
+        if "verify" in layers.split():
+            assert frame == frames["verify"], (frame, layers)
+    # The back-scroll to Predict ends with paths and boxes on the measurement frame.
+    second_predict = [entry for entry in log if "predict" in entry[1].split()]
+    assert second_predict and second_predict[-1][0] == frames["predict"] == 140

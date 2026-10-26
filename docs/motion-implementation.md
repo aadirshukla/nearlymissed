@@ -257,3 +257,22 @@ signature is unchanged and was confirmed from their file.
 Still for host browser QA: the 1600 px step-3 layout with the sidebar open, 390 px stacking,
 and that the stage stays idle below 960 px. Desktop scrolling and ArrowRight were already
 confirmed by the host.
+
+## Acceptance fix, third pass: overlays during transitions
+
+- **Problem:** on a back-scroll from Verify (frame 154) to Predict (frame 140), the stage set
+  `data-layers="predict"` before animating. The frame-140 dashed paths therefore showed over
+  frames 154 to 141.
+- **Fix:** `goTo` now clears every overlay (`data-layers=""`) while frames move. A new
+  `arrive()` draws the target frame and only then reveals that chapter's layers. Reduced
+  motion and same-frame moves go straight to `arrive()`, and so does switching to reduced
+  motion mid-transition. The static endpoints were already correct and are unchanged.
+- **Tests:**
+  - A structural guard checks that layers are set only in `arrive()`, after the draw.
+  - A behavioural test runs the real stage script in Node with a minimal fake DOM, scrolling
+    observe → predict → verify → predict → observe. It asserts that predict and verify
+    overlays are only ever visible on frames 140 and 154. The test skips if Node is absent.
+- **Mutation check:** I reintroduced the early reveal and ran the behavioural test against
+  it. It failed with `(139, 'predict')`, so the test catches this bug.
+- **Targeted run:** `pytest tests/test_motion.py tests/test_presenter.py` → **32 passed**.
+  I did not rerun the full suite because no other module changed.

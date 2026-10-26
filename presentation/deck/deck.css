@@ -21,6 +21,12 @@ html, body { margin: 0; height: 100%; background: #000; color: var(--white); fon
 #stage { position: relative; width: 1920px; height: 1080px; flex: none; transform-origin: center center; }
 .slide { position: absolute; inset: 0; background: var(--ink); overflow: hidden; visibility: hidden; }
 .slide.active { visibility: visible; }
+/* Some embedded browsers keep an inactive slide's native video layer composited despite
+ * visibility: hidden; removing it from layout forces it off. Print mode marks every slide active. */
+.slide:not(.active) video { display: none; }
+/* realClip sets an inline visibility: visible on the freeze still, which overrides the
+ * inactive slide's inherited visibility: hidden; take it out of layout instead (not in print). */
+body:not(.print-mode) .slide:not(.active) .real-frame .still { display: none; }
 
 em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spacing: 0; }
 .amber { color: var(--amber); } .coral { color: var(--coral); } .green { color: var(--green); } .muted { color: var(--muted); }
@@ -39,13 +45,20 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .tag { display: inline-block; font: 500 18px var(--mono); letter-spacing: 2px; text-transform: uppercase; padding: 6px 12px; border-radius: 4px; border: 1.5px solid var(--amber); color: var(--amber); background: rgba(11,11,12,.75); white-space: nowrap; }
 .tag.solid { background: var(--amber); color: var(--ink); }
 .panel-tags { position: absolute; left: 16px; top: 16px; display: flex; gap: 10px; }
-.scene-host svg { display: block; width: 100%; height: 100%; }
+.scene-host { position: relative; overflow: hidden; background: #000; }
+/* Real clip: video, exact-frame still and overlay share one box sized to the frame (cover crop). */
+.real-frame { position: absolute; }
+.real-frame video, .real-frame .still, .real-frame .real-overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.real-frame .still { visibility: hidden; }
+.real-frame video, .real-frame .still { transition: filter .45s ease; }
+.real-frame.frozen video, .real-frame.frozen .still { filter: saturate(.45) brightness(.82); }
+.clip-credit { position: absolute; left: 16px; bottom: 12px; margin: 0; font: 15px var(--mono); color: var(--white); background: rgba(11,11,12,.72); padding: 4px 8px; border-radius: 4px; }
 .footnote { position: absolute; left: 120px; bottom: calc(var(--hud-band) + 8px); margin: 0; font: 20px var(--sans); color: var(--muted); }
 
 /* 1 */
 .scene-panel { position: absolute; right: 120px; top: 110px; width: 1040px; height: 585px; border-radius: 14px; overflow: hidden; outline: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.6); }
 .scene-panel .scene-host { width: 100%; height: 100%; }
-.freeze-note { position: absolute; right: 18px; bottom: 16px; text-align: right; font: 26px/1.4 var(--sans); }
+.freeze-note { position: absolute; right: 18px; bottom: 16px; text-align: right; font: 26px/1.4 var(--sans); background: rgba(11,11,12,.8); padding: 12px 16px; border-radius: 8px; }
 .freeze-note .tag { border-color: var(--coral); color: var(--coral); }
 .hook { position: absolute; left: 120px; bottom: 120px; }
 .hook h1 { margin: 0; font-weight: 600; font-size: 104px; letter-spacing: -3px; line-height: 1.04; }
@@ -63,7 +76,7 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .people { display: grid; grid-template-columns: 1.1fr 1fr; gap: 80px; margin-top: 70px; }
 .names { font-size: 64px; margin: 14px 0 0; }
 .who { font-size: 34px; line-height: 1.35; margin: 14px 0 0; }
-.synthetic-line { margin-top: 50px; font-size: 28px; display: flex; gap: 20px; align-items: center; }
+.real-line { margin-top: 50px; font-size: 28px; line-height: 1.35; display: flex; gap: 20px; align-items: center; }
 
 /* 3 */
 .earned-scene { position: absolute; left: 120px; top: 330px; width: 900px; height: 640px; border-radius: 14px; overflow: hidden; outline: 1px solid var(--line); }
@@ -79,7 +92,10 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .ruler .marker span { position: absolute; top: -6px; left: 12px; font: 500 22px var(--mono); color: var(--white); white-space: nowrap; }
 .proof { margin: 0; }
 .proof .crop { position: relative; overflow: hidden; border-radius: 10px; outline: 1px solid var(--line); height: 138px; }
-.proof .crop img { position: absolute; width: 1280px; left: -350px; top: -196px; }
+.proof .crop img { position: absolute; }
+.explain-card { background: var(--card); border-left: 4px solid var(--coral); border-radius: 8px; padding: 14px 18px; font-size: 19px; line-height: 1.38; }
+.explain-card b { font-size: 21px; }
+.explain-card ul { margin: 6px 0 0; padding-left: 20px; color: #D6D3D1; }
 .proof figcaption { font: 17px var(--mono); color: var(--muted); margin-top: 10px; }
 
 /* 4 */
@@ -87,7 +103,8 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .media-swap { position: relative; width: 1160px; height: 653px; border-radius: 14px; overflow: hidden; outline: 1px solid var(--line); background: #000; }
 .media-swap video { width: 100%; height: 100%; display: block; }
 .investigation { position: absolute; inset: 0; background: var(--ink); overflow: hidden; }
-.investigation img { position: absolute; width: 1616px; left: -436px; top: 0; }
+/* Investigation capture (1440x1000) at 1.028x: the frame view and its "Original frame 34" caption. */
+.investigation img { position: absolute; width: 1480px; left: -315px; top: -257px; }
 .investigation .hl { position: absolute; border: 4px solid var(--amber); border-radius: 8px; }
 .clip-timeline { position: relative; height: 40px; margin-top: 16px; }
 .clip-timeline .bar { position: absolute; left: 0; right: 0; top: 18px; height: 4px; background: var(--line); border-radius: 2px; }
@@ -99,29 +116,45 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .event-card .row { display: flex; justify-content: space-between; align-items: center; font: 22px var(--mono); }
 .event-card .t { font-size: 21px; margin-top: 8px; line-height: 1.3; }
 .event-card .d { font-size: 19px; color: var(--muted); margin-top: 4px; }
+.summary-card { background: var(--card); border-radius: 6px; padding: 10px 16px; display: flex; flex-direction: column; gap: 4px; font-size: 21px; }
+.summary-card b { font: 500 26px var(--mono); color: var(--white); margin-right: 6px; }
+.summary-card span { color: var(--muted); font-size: 18px; margin-left: 6px; }
+.clip-timeline button.contact { background: var(--coral); }
 .side-note { font-size: 21px; line-height: 1.4; margin: 10px 0 0; color: var(--white); }
 
 /* 5 */
 .review-scene { position: absolute; left: 120px; top: 330px; width: 980px; height: 640px; border-radius: 14px; overflow: hidden; outline: 1px solid var(--line); }
 .review-scene .scene-host { width: 100%; height: 100%; }
 .contact-tag { position: absolute; right: 16px; bottom: 16px; }
-.review-side { position: absolute; left: 1150px; right: 120px; top: 330px; display: flex; flex-direction: column; gap: 20px; }
+.review-side { position: absolute; left: 1150px; right: 120px; top: 330px; display: flex; flex-direction: column; gap: 16px; }
 .signals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.signals li { font-size: 28px; display: flex; align-items: center; gap: 14px; }
+.signals li { font-size: 25px; display: flex; align-items: center; gap: 14px; }
 .signals li::before { content: ""; width: 13px; height: 13px; border-radius: 50%; background: var(--coral); flex: none; }
-.signals li.lead { color: var(--amber); font-size: 22px; line-height: 1.35; }
+.signals li.lead { color: var(--amber); font-size: 20px; line-height: 1.35; }
 .signals li.lead::before { background: var(--amber); }
-.decisions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.decision { border: 1.5px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; font-size: 18px; color: var(--muted); }
-.decision b { font-size: 24px; color: var(--white); }
-.decision.confirm { border-color: var(--amber); background: rgba(242,169,59,.08); }
-.proof.tall .crop { height: 170px; }
-.proof .crop.incidents img { width: 1733px; left: -1083px; top: -639px; }
+.read { background: var(--card); border-left: 4px solid var(--amber); border-radius: 8px; padding: 12px 18px; font-size: 21px; line-height: 1.4; }
+.read p { margin: 0 0 6px; } .read .mini-title { margin: 0 0 6px; font-size: 15px; }
+.read .status { font: 17px var(--mono); color: var(--muted); margin: 6px 0 0; }
+.proof.tall .crop { height: 216px; width: 360px; }
+/* Incidents capture (1440x1000) at 1x: perspective caveat, decision prompt and the three buttons only. */
+.proof .crop.incidents img { width: 1440px; left: -1046px; top: -340px; }
 
 /* 6 */
-.follow-grid { position: absolute; left: 120px; right: 120px; top: 330px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; }
-.proof .crop.dispatch { height: 560px; }
-.proof .crop.dispatch img { width: 1500px; left: -405px; top: -173px; }
+.follow-grid { position: absolute; left: 120px; right: 120px; top: 290px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 40px; }
+.gate-col { display: flex; flex-direction: column; }
+.gate { background: var(--card); border-radius: 10px; padding: 18px 20px; margin-bottom: 26px; }
+.gate-flow { display: flex; align-items: center; gap: 8px; font-size: 19px; white-space: nowrap; }
+.gate-flow span { border: 1.5px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+.gate-flow span.coral { border-color: var(--coral); }
+.gate-flow i { font-style: normal; color: var(--muted); }
+.gate p { font-size: 19px; color: var(--muted); margin: 12px 0; }
+.gate-now { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+.gate-now div { font-size: 18px; color: var(--muted); display: flex; flex-direction: column; }
+.gate-now b { font: 500 44px var(--mono); color: var(--white); }
+/* Street Lab capture (1440x1000) at 0.55x: the "Evidence summary" heading and its four numbers. */
+.proof .crop.streetlab { height: 112px; }
+.proof .crop.streetlab img { width: 792px; left: -185px; top: -383px; }
+.assume { font: 18px/1.4 var(--mono); color: var(--muted); }
 .mini-title { font: 500 18px var(--mono); letter-spacing: 2px; text-transform: uppercase; color: var(--amber); margin: 0 0 18px; }
 .bar-group { margin-bottom: 28px; }
 .bar-group .w { font-size: 24px; margin-bottom: 10px; }
@@ -130,12 +163,13 @@ em { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spa
 .bar-row .b.cur { background: #78716C; } .bar-row .b.hyp { background: var(--amber); }
 .caveat { font-size: 20px; line-height: 1.4; color: var(--coral); margin: 12px 0 0; }
 .brief .caveat { color: var(--muted); }
-.brief-page { background: var(--paper); color: var(--paper-ink); border-radius: 10px; padding: 26px 28px; height: 560px; overflow: hidden; font-size: 17px; line-height: 1.45; }
+.brief-page { background: var(--paper); color: var(--paper-ink); border-radius: 10px; padding: 26px 28px; height: 600px; overflow: hidden; font-size: 17px; line-height: 1.45; }
 .brief-page h4 { font: italic 400 30px/1.15 var(--serif); margin: 0 0 12px; }
 .brief-page h5 { font-size: 19px; margin: 16px 0 6px; }
-.brief-page blockquote { margin: 0 0 10px; padding: 8px 12px; border-left: 5px solid var(--amber); background: #FBEBD0; }
+.brief-page blockquote { margin: 0 0 10px; padding: 8px 12px; border-left: 5px solid var(--amber); background: #FBEBD0; font-size: 16px; }
 .brief-page p { margin: 0 0 8px; }
 .brief-page ul { margin: 0; padding-left: 20px; }
+.brief-page li { margin: 0 0 4px; }
 
 /* 7 */
 .three-col { position: absolute; left: 120px; right: 120px; top: 330px; display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 56px; }

@@ -4,6 +4,9 @@
 //  - no network URLs are loaded at playback (no CDN)
 //  - notes exist for every slide and their cue windows tile 0:00-3:00
 //  - the PDF backup exists with exactly 8 pages
+//  - real footage: deck clip copies match the app's hash-bound real-demo files,
+//    every play/freeze frame has its exact still, no synthetic-demo labels remain
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -38,16 +41,17 @@ for (const m of html.matchAll(/--img:url\(([^)]+)\)/g)) refs.add(m[1]);
 const local = [...refs].filter((r) => !/^(https?:|data:)/.test(r));
 const missing = local.filter((r) => !fs.existsSync(path.join(deck, r)));
 check(missing.length === 0, `all ${local.length} referenced local files exist${missing.length ? `; missing: ${missing.join(', ')}` : ''}`);
-const network = [html, css, read('deck.js'), read('scenes.js'), read('notes.js')].join('\n').match(/https?:\/\/[^\s"')]+/g) || [];
+const network = [html, css, read('deck.js'), read('scenes.js'), read('notes.js'), read('sync.js')].join('\n').match(/https?:\/\/[^\s"')]+/g) || [];
 const loaded = network.filter((u) => !u.startsWith('http://www.w3.org/2000/svg'));
 check(loaded.length === 0, `no network URLs loaded at playback${loaded.length ? `: ${loaded.join(', ')}` : ''}`);
 check(fs.existsSync(path.join(deck, 'vendor/gsap.min.js')), 'GSAP bundled locally');
 
 const sandbox = {window: {}};
 vm.createContext(sandbox);
-vm.runInContext(read('data/demo-metrics.js'), sandbox);
+vm.runInContext(read('data/real-metrics.js'), sandbox);
 vm.runInContext(read('notes.js'), sandbox);
-const notes = sandbox.window.NEARMISS_NOTES(sandbox.window.NEARMISS_METRICS);
+const R = sandbox.window.NEARMISS_REAL;
+const notes = sandbox.window.NEARMISS_NOTES(R);
 check(notes.length === 8, `notes for 8 slides (found ${notes.length})`);
 const toSec = (s) => s.split(':').reduce((a, v) => a * 60 + Number(v), 0);
 let cursor = 0;
@@ -65,6 +69,28 @@ notes.forEach((n, i) => {
 check(tiled && cursor === 180, 'note cue windows tile 0:00–3:00 and match slide boundaries');
 const words = notes.flatMap((n) => n.cues.map((c) => c[1])).join(' ').split(/\s+/).length;
 console.log(`     spoken words: ${words} (~${(words / 180).toFixed(2)} words/s)`);
+
+const repo = path.resolve(deck, '..', '..');
+const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'static/real-demo/manifest.json'), 'utf8'));
+check(sha(path.join(deck, R.assets.source)) === manifest.source_sha256 && R.source.source_sha256 === manifest.source_sha256,
+  `deck source clip SHA-256 matches static/real-demo manifest (${manifest.source_sha256.slice(0, 12)}…)`);
+check(sha(path.join(deck, R.assets.annotated)) === sha(path.join(repo, 'static/real-demo/annotated.mp4')) && sha(path.join(deck, R.assets.annotated)) === R.source.annotated_sha256,
+  'deck annotated clip matches the app render static/real-demo/annotated.mp4');
+check(sha(path.join(repo, 'static/real-demo/tracks.json')) === R.source.tracks_sha256 && R.source.tracks_sha256 === manifest.tracks_sha256,
+  'overlay data was derived from the manifest-bound tracks.json');
+const c = R.counts;
+check(c.warnings === manifest.counts.warnings && c.suspected_incidents === manifest.counts.suspected_incidents && c.track_ids === manifest.counts.track_ids,
+  `counts match manifest: ${c.warnings} warnings, ${c.suspected_incidents} contact candidates, ${c.track_ids} tracker IDs`);
+const frozen = Object.values(R.moments).flatMap((m) => [m.from_frame, m.freeze_frame].filter((f) => f !== undefined));
+const noStill = frozen.filter((f) => !R.assets.stills[String(f)] || !fs.existsSync(path.join(deck, R.assets.stills[String(f)])));
+check(noStill.length === 0, `exact-frame stills for play/freeze frames ${[...new Set(frozen)].join(', ')}${noStill.length ? `; missing ${noStill}` : ''}`);
+check(R.case.measurement.frame !== R.case.first_alert_frame, `case keeps measurement frame ${R.case.measurement.frame} apart from first alert ${R.case.first_alert_frame}`);
+const shown = [html, read('scenes.js'), read('notes.js')].join('\n');
+const stale = shown.match(/synthetic demo|scripted tracks|demo-metrics|assets\/captures\/|assets\/clips\//gi) || [];
+check(stale.length === 0, `no synthetic-demo labels or assets in the deck${stale.length ? `: ${[...new Set(stale)].join(', ')}` : ''}`);
+check(['moment', 'purpose', 'earned', 'review'].every((id) => html.split(`data-id="${id}"`)[1].split('</section>')[0].includes('Real footage')), 'slides 1, 2, 3 and 5 carry the Real footage label');
+check(html.includes('Mike Bird') && /no incident labels/.test(html), 'footage credit and the no-labels boundary are on screen');
 
 const pdf = path.resolve(deck, '..', 'exports', 'NearMiss-deck.pdf');
 if (fs.existsSync(pdf)) {

@@ -1,7 +1,8 @@
 # NearMiss presentation: creative and technical credits
 
-These credits cover the challenge video (`presentation/video/`), the browser
-deck (`presentation/deck/`) and its PDF backup. They are also shown on the
+These credits cover the challenge video (`presentation/video/`, controlled
+synthetic demonstration), the browser deck (`presentation/deck/`, real traffic
+footage) and its PDF backup. They are also shown on the
 video's end card and on the deck's last slide.
 
 ## People
@@ -21,23 +22,51 @@ video's end card and on the deck's last slide.
   presenter notes and on-screen wording, and these credits. A later Claude Opus
   (`claude-opus-5-5`) session made the corrections listed in
   `docs/presentation-guide.md` (measurement frame vs first alert, footer band,
-  rehearsal timing, provenance wording).
+  rehearsal timing, provenance wording). A further Claude Opus
+  (`claude-opus-5-5`) session moved the deck and its PDF to the real traffic
+  sample: `extract_real_metrics.py`, `sync.js`, the real-footage scenes, notes,
+  checks and tests. The film was not changed.
 - The host session supplied the app screenshots, the exported brief, the
-  music file and its licence. It renders the video and does the visual QA.
+  music file and its licence, and processed the real traffic sample. It renders
+  the video and does the visual QA.
 - AI wrote no voice-over (the video has none) and no music. The on-screen text
   was drafted with AI assistance.
 
 ## Visual sources
 
-- **App captures** (`presentation/video/public/captures/`, copied to
-  `deck/assets/captures/`): screenshots of the actual NearMiss app running the
-  synthetic demo, taken by the host session.
+### Deck and PDF backup (real footage)
+
+- **Traffic footage:** Mike Bird, “Traffic Flow In The Highway”,
+  [Pexels video 2103099](https://www.pexels.com/video/traffic-flow-in-the-highway-2103099/),
+  used under the [Pexels License](https://www.pexels.com/license/) (checked by
+  the host 2026-10-25). First 15 s, 1280×720, 24 fps, no audio; source SHA-256
+  `e25026291ef2990862e588cc8648883e61f6c7adcc66d182e3b72881ec73a2e4`. No creator
+  endorsement is implied. Credited on slides 1, 2 and 8, the PDF metadata and
+  the community brief. Copies: `deck/assets/real/source.mp4` and exact-frame
+  stills `deck/assets/real/source-NNN.jpg` (OpenCV-decoded).
+- **Overlays:** actual YOLO11n + ByteTrack rows precomputed by the app
+  (`static/real-demo/tracks.json`) and NearMiss's own post-processing, drawn by
+  the deck (SVG) and the PDF (ReportLab) over the real frames. No box or path is
+  scripted. Every warning and suspected contact is an unverified, experimental
+  candidate on ordinary traffic with no incident labels.
+- **Annotated clip** (`deck/assets/real/annotated.mp4`): the app's real
+  annotated render with its baked credit; byte-identical to
+  `static/real-demo/annotated.mp4` (checked by `npm run check`).
+- **App captures** (`deck/assets/real/*.png`): screenshots of the live app on
+  this clip (Analysis, Investigation, Incidents, Street Lab), taken by the host
+  session at 1440×1000 on 2026-10-25. `community-brief.md` is the actual
+  Street Lab download from that session.
+
+### 165-second film (controlled synthetic demonstration, unchanged)
+
+- **App captures** (`presentation/video/public/captures/`): screenshots of the
+  actual NearMiss app running the synthetic demo, taken by the host session.
 - **Annotated clip**: the app's own annotated render of the synthetic demo. Its
   SHA-256 matches the app's cached render in `.nearmiss_cache/` (checked
   2026-10-25).
-- **Traffic diagrams**: functional diagrams drawn in code (SVG in the deck,
-  React in the video, ReportLab in the PDF) from the scripted positions in
-  `presentation/data/demo-metrics.json`. They are not images of real traffic.
+- **Traffic diagrams**: functional diagrams drawn in code (React) from the
+  scripted positions in `presentation/data/demo-metrics.json`. They are not
+  images of real traffic.
 - **Background street image**: `static/nearmiss-hero.jpg`, inherited from the
   app's landing page. **Its origin is unverified:** its creator, how it was made
   (camera, stock or AI-generated) and its licence have not been confirmed.
@@ -77,8 +106,10 @@ Versions are the ones installed in this repo's `.venv` on 2026-10-25.
 | Plotly (6.9) | Charts | MIT |
 | ReportLab (4.5.1) | PDF exports, and this deck's PDF backup | BSD |
 
-The guided demo does not run YOLO or ByteTrack. Scripted track rows from
-`nearmiss/demo.py` replace them, and every later stage is the normal pipeline.
+The controlled synthetic example does not run YOLO or ByteTrack: scripted track
+rows from `nearmiss/demo.py` replace them, and every later stage is the normal
+pipeline. The bundled real traffic sample uses YOLO11n + ByteTrack rows
+precomputed locally by the app; the deck runs no inference.
 
 ## Open source used by the presentation
 
@@ -91,13 +122,22 @@ The guided demo does not run YOLO or ByteTrack. Scripted track rows from
 | Google Chrome (installed on host) | Remotion renderer used for final exports via `REMOTION_BROWSER_EXECUTABLE` | Google Chrome / Chromium licences |
 | FFmpeg | Clip resampling and the silent remux | LGPL/GPL (system install) |
 
-## What is synthetic
+## What is real and what is synthetic
 
-Every app scene in the video and the deck is the NearMiss **synthetic demo**:
-generated footage and scripted tracks, with no real place, traffic or crash.
-The traffic diagrams replay the scripted positions from
-`presentation/data/demo-metrics.json` and carry a "Synthetic demo" tag. The
-dispatch shown is the app's local simulated inbox. Nothing was sent anywhere.
+- **Deck and PDF: real footage.** Every traffic scene is Mike Bird's real
+  highway clip with NearMiss's actual model output, tagged "Real footage". It is
+  ordinary traffic with no ground-truth labels: the 41 warnings and 5 suspected
+  contacts are unverified, many are likely false alarms from perspective or
+  occlusion, and 78 tracker IDs are not a vehicle count. The deck does not claim
+  a near miss or collision, shows no confirmation or dispatch for these
+  candidates (0 confirmed, 0 notices), and explains simulated dispatch only as
+  what would follow a confirmation. The automated test suite checks code
+  behaviour, not detector accuracy. Street Lab crossing times are arithmetic on
+  stated assumptions, not a road-safety measurement.
+- **165-second film: synthetic.** Every app scene in the film is the NearMiss
+  controlled **synthetic demo**: generated footage and scripted tracks, with no
+  real place, traffic or crash. Its dispatch is the app's local simulated inbox.
+  Nothing was sent anywhere.
 
 ## Additional real-traffic overlay preview
 
@@ -109,5 +149,6 @@ the real clip locally with YOLO11 nano and ByteTrack, then drew its observed
 boxes, IDs, trails and provisional screening overlays. The source credit is
 baked into the preview. See `static/real-demo/README.md` and its hash-bound
 manifest for the actual inference settings and limitations. This preview is
-not synthetic traffic; the existing 165-second film and eight-slide deck still
-present the separately labeled controlled synthetic example.
+not synthetic traffic. The eight-slide deck now uses the same real clip; the
+existing 165-second film still presents the separately labeled controlled
+synthetic example.

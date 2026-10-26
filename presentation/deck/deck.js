@@ -4,7 +4,7 @@
   const params = new URLSearchParams(location.search);
   const slides = [...document.querySelectorAll('.slide')];
   const scenes = window.DECK_SCENES;
-  const notes = window.NEARMISS_NOTES(window.NEARMISS_METRICS);
+  const notes = window.NEARMISS_NOTES(window.NEARMISS_REAL);
   const plan = slides.map((s) => ({id: s.dataset.id, seconds: Number(s.dataset.seconds), steps: Number(s.dataset.steps || 0), speaker: s.dataset.speaker, title: s.querySelector('.kicker')?.textContent.trim() || s.dataset.id}));
   const TOTAL = plan.reduce((a, p) => a + p.seconds, 0); // 180
   const startOf = (i) => plan.slice(0, i).reduce((a, p) => a + p.seconds, 0);

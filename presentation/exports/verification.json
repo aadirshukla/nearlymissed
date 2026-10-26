@@ -5,7 +5,12 @@
   "deck": {
     "slides": 8,
     "scheduled_seconds": 180,
-    "behavior_tests": 6
+    "behavior_tests": 18,
+    "source_kind": "real_traffic_demo",
+    "source_sha256": "e25026291ef2990862e588cc8648883e61f6c7adcc66d182e3b72881ec73a2e4",
+    "verified_at": "2026-10-26T03:24:09.743374+00:00",
+    "python_suite": "271 passed; independently rerun by implementation worker",
+    "content": "Real car footage with stored tracking overlays; unverified warnings"
   },
   "video_stream_sha256": "287abaa57f676717d022bbe1b2b1beda127382af69635080520a9e2aed473ca4",
   "soundtrack_mean_db": -24.7,
@@ -73,8 +78,9 @@
       "sha256": "509ff169ac48f28a8585fb588bd57e24ef6127a4be78f74a28359ece27b140d7"
     },
     "NearMiss-deck.pdf": {
-      "bytes": 1323870,
-      "sha256": "3f338abcd90ad28e8705d2724b30fa8dfd7d3b784a1e861d44a668b50dfea2bf"
+      "bytes": 1899932,
+      "sha256": "8868ae71da9bd6df458db8b5ac0fc3261bed735185540e17f905a0110ccdffc3",
+      "pages": 8
     }
   }
 }

@@ -30,7 +30,8 @@ function boot() {
   const byId = (id) => (ids[id] ??= node(id === 'rehearsal-bar' ? {firstElementChild: {style: {}}} : {}));
   const docListeners = {};
   const slides = plan.map((p) => node({dataset: p, querySelector: () => ({textContent: p.id}), querySelectorAll: () => []}));
-  const scene = {enter() {}, step() {}, final() {}};
+  const left = [];
+  const sceneFor = (id) => ({enter() {}, step() {}, final() {}, leave() { left.push(id); }});
   const sandbox = {
     URLSearchParams, Number, String, Math, console,
     location: {search: '', hash: ''},
@@ -41,7 +42,7 @@ function boot() {
     innerWidth: 1920, innerHeight: 1080,
     matchMedia: () => ({matches: false, addEventListener() {}}),
     addEventListener() {},
-    DECK_SCENES: Object.fromEntries(plan.map((p) => [p.id, scene])),
+    DECK_SCENES: Object.fromEntries(plan.map((p) => [p.id, sceneFor(p.id)])),
     NEARMISS_NOTES: () => plan.map(() => ({cues: []})),
     document: {
       body: node(),
@@ -57,6 +58,7 @@ function boot() {
   const D = sandbox.DECK;
   return {
     D,
+    left,
     advance(seconds) { now += seconds * 1000; frame?.(); },
     click: () => byId('stage').listeners.click({target: {closest: () => null}}),
     key: (key) => docListeners.keydown({key, preventDefault() {}}),
@@ -121,4 +123,33 @@ test('a frame-by-frame rehearsal visits every reveal, reaches 8/8 and clears REH
   assert.deepEqual([...seen].sort(), expected.sort());
   assert.deepEqual([deckState.D.index, deckState.D.step], [7, 2]);
   assert.doesNotMatch(deckState.mode(), /REHEARSAL/);
+});
+
+test('every way of leaving a slide calls its leave() so real-footage video stops', () => {
+  const deckState = boot();
+  const id = (i) => plan[i].id;
+  deckState.key('1');
+  for (let i = 0; i < Number(plan[0].steps); i++) deckState.key('ArrowRight');
+  deckState.key('ArrowRight'); // past the last reveal of slide 1
+  assert.deepEqual(deckState.left, [id(0)]);
+  deckState.key('ArrowLeft'); // back to slide 1, final state
+  assert.deepEqual(deckState.left, [id(0), id(1)]);
+  deckState.key('3');
+  deckState.key('5');
+  deckState.key('End');
+  deckState.key('Home');
+  assert.deepEqual(deckState.left.slice(2), [id(0), id(2), id(4), id(7)]);
+  // Rehearsal jumps (go with animate: false) leave too.
+  deckState.key('3');
+  deckState.left.length = 0;
+  deckState.key('r');
+  // Starting rehearsal returns to slide 1 (leaving slide 3); a long frame gap then jumps
+  // straight to slide 5, leaving slide 1.
+  deckState.advance(scheduledAt(4, 0) + 0.05);
+  assert.deepEqual(deckState.left, [id(2), id(0)]);
+  // Re-rendering the same slide (reduced-motion toggle, stepping back) does not leave it;
+  // the scene's enter() restarts its own clip instead.
+  deckState.left.length = 0;
+  deckState.key('m');
+  assert.deepEqual(deckState.left, []);
 });

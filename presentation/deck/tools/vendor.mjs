@@ -1,7 +1,8 @@
 // Copies every runtime dependency into the deck so playback needs no network:
-//   vendor/gsap.min.js, assets/fonts/*.ttf (+ OFL-*.txt), assets/hero/, assets/captures/.
-// Demo clips and data/demo-metrics.js come from
-//   .venv/bin/python presentation/scripts/extract_metrics.py --clips
+//   vendor/gsap.min.js, assets/fonts/*.ttf (+ OFL-*.txt), assets/hero/.
+// The real clip, exact-frame stills, host app captures, community brief and
+// data/real-metrics.js come from
+//   .venv/bin/python presentation/scripts/extract_real_metrics.py
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -36,20 +37,4 @@ for (const [pkg, name] of [['inter', 'Inter'], ['instrument-serif', 'InstrumentS
 }
 
 copy(path.join(repo, 'static/nearmiss-hero.jpg'), path.join(deck, 'assets/hero/nearmiss-hero.jpg'));
-const captures = path.join(deck, '..', 'video/public/captures');
-let count = 0;
-if (fs.existsSync(captures)) {
-  for (const name of fs.readdirSync(captures)) {
-    if (/\.(png|jpg|md)$/i.test(name)) {
-      copy(path.join(captures, name), path.join(deck, 'assets/captures', name));
-      count++;
-    }
-  }
-}
-// brief.md as a script so the deck can show it from file:// (fetch is blocked there).
-const brief = path.join(deck, 'assets/captures/brief.md');
-fs.writeFileSync(
-  path.join(deck, 'data/brief.js'),
-  `window.NEARMISS_BRIEF = ${JSON.stringify(fs.existsSync(brief) ? fs.readFileSync(brief, 'utf8') : null)};\n`,
-);
-console.log(`vendored gsap, ${Object.keys(fonts).length} fonts, hero, ${count} host captures`);
+console.log(`vendored gsap, ${Object.keys(fonts).length} fonts, hero`);

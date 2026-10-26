@@ -1,8 +1,10 @@
 """Eight-page PDF backup of the NearMiss deck, every reveal in its final state.
 
 Editable source: layout mirrors presentation/deck/index.html + deck.css; all
-numbers come from presentation/data/demo-metrics.json, all screenshots from
-the host captures, diagrams from the scripted demo samples.
+numbers come from presentation/data/real-metrics.json (real footage, actual
+NearMiss output, no new inference). Frames are exact-frame stills of the real
+clip with that frame's stored boxes drawn over them; screenshots are the host's
+captures of the live app on the same clip.
 
     .venv/bin/python presentation/deck/tools/build_pdf.py
     -> presentation/exports/NearMiss-deck.pdf (+ prints a page/asset report)
@@ -25,9 +27,7 @@ DECK = Path(__file__).resolve().parents[1]
 PRESENTATION = DECK.parent
 OUT = PRESENTATION / "exports" / "NearMiss-deck.pdf"
 ASSETS = DECK / "assets"
-M = json.loads((PRESENTATION / "data" / "demo-metrics.json").read_text(encoding="utf-8"))
-BRIEF_PATH = ASSETS / "captures" / "brief.md"
-BRIEF = BRIEF_PATH.read_text(encoding="utf-8") if BRIEF_PATH.exists() else None
+R = json.loads((PRESENTATION / "data" / "real-metrics.json").read_text(encoding="utf-8"))
 
 W, H = 1920, 1080
 INK, CARD, LINE = HexColor("#0B0B0C"), HexColor("#131315"), HexColor("#27272A")
@@ -207,136 +207,13 @@ def shade(c, top_alpha, bottom_alpha):
     c.drawImage(ImageReader(buf), 0, 0, W, H, mask="auto")
 
 
-# ------------------------------------------------------------ diagram
+# ------------------------------------------------------------ real frames
 
-def actor_at(actor, t):
-    step = actor["sample_step_seconds"]
-    samples = actor["samples"]
-    i = int(t // step)
-    clamp = lambda j: max(0, min(j, len(samples) - 1))  # noqa: E731
-    p, q = samples[clamp(i)], samples[clamp(i + 1)]
-    if p is None:
-        return None
-    if q is None:
-        return p
-    k = t / step - i
-    return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k]
-
-
-def actor(track_id):
-    return next(a for a in M["actors"] if a["track_id"] == track_id)
-
-
-def intersection(c, x, y, w, h, view, t, highlight, trail_from=None, dashed=(), rings=(), saturation=1.0):
-    vx, vy, vw, vh = view
-    k = max(w / vw, h / vh)  # slice, like the SVG
-    ox = x + (w - vw * k) / 2 - vx * k
-    oy = y + (h - vh * k) / 2 - vy * k
-    P = lambda px, py: (ox + px * k, oy + py * k)  # noqa: E731 - demo px -> stage
-    clip(c, x, y, w, h, 14)
-
-    def drect(px, py, pw, ph, color, stroke=None, sw=1, radius=0):
-        sx, sy = P(px, py)
-        rect(c, sx, sy, pw * k, ph * k, fill=color, stroke=stroke, width=sw, radius=radius * k)
-
-    (h0, h1), (v0, v1) = M["source"]["road"]["horizontal_y"], M["source"]["road"]["vertical_x"]
-    FW, FH = M["source"]["frame"]["width"], M["source"]["frame"]["height"]
-    cy, cx = (h0 + h1) / 2, (v0 + v1) / 2
-    drect(0, 0, FW, FH, HexColor("#1B1E1A"))
-    for x1, y1, x2, y2 in ((30, 24, 330, 150), (630, 24, 930, 150), (30, 390, 330, 516), (630, 390, 930, 516)):
-        drect(x1, y1, x2 - x1, y2 - y1, HexColor("#24271F"), HexColor("#3A3E39"))
-    drect(0, h0 - 22, FW, h1 - h0 + 44, HexColor("#47453F"))
-    drect(v0 - 22, 0, v1 - v0 + 44, FH, HexColor("#47453F"))
-    drect(0, h0, FW, h1 - h0, HexColor("#28292B"))
-    drect(v0, 0, v1 - v0, FH, HexColor("#28292B"))
-
-    def dline(a, b, color, width, dash=None, alpha=1.0):
-        c.saveState()
-        c.setStrokeColor(color)
-        c.setStrokeAlpha(alpha)
-        c.setLineWidth(width)
-        c.setLineCap(1)
-        if dash:
-            c.setDash(*dash)
-        (ax, ay), (bx, by) = P(*a), P(*b)
-        c.line(ax, Y(ay), bx, Y(by))
-        c.restoreState()
-
-    lane = HexColor("#D79628")
-    for o in (-3, 3):
-        dline((0, cy + o), (v0 - 46, cy + o), lane, 2 * k)
-        dline((v1 + 46, cy + o), (FW, cy + o), lane, 2 * k)
-        dline((cx + o, 0), (cx + o, h0 - 46), lane, 2 * k)
-        dline((cx + o, h1 + 46), (cx + o, FH), lane, 2 * k)
-    stripe = HexColor("#CDCDC8")
-    for sy in range(h0 + 6, h1 - 4, 16):
-        drect(v0 - 40, sy, 28, 8, stripe)
-        drect(v1 + 12, sy, 28, 8, stripe)
-    for sx in range(v0 + 6, v1 - 4, 16):
-        drect(sx, h0 - 40, 8, 28, stripe)
-        drect(sx, h1 + 12, 8, 28, stripe)
-    for a, b in (((v0 - 46, cy + 6), (v0 - 46, h1)), ((v1 + 46, h0), (v1 + 46, cy - 6)),
-                 ((v0, h0 - 46), (cx - 6, h0 - 46)), ((cx + 6, h1 + 46), (v1, h1 + 46))):
-        dline(a, b, stripe, 3 * k)
-
-    if trail_from is not None:
-        for tid, color in highlight.items():
-            a = actor(tid)
-            pts = []
-            s = trail_from
-            while s <= t + 1e-9:
-                p = actor_at(a, s)
-                if p:
-                    pts.append(p)
-                s += a["sample_step_seconds"]
-            for p, q in zip(pts, pts[1:]):
-                dline(p, q, color, 3 * k * vw / 960, alpha=0.75)
-    for a_pt, b_pt, color in dashed:
-        dline(a_pt, b_pt, color, 3 * k * vw / 960, dash=(10 * k * vw / 960, 7 * k * vw / 960))
-
-    for a in M["actors"]:
-        p = actor_at(a, t)
-        if p is None:
-            continue
-        accent = highlight.get(a["track_id"])
-        if a["class_name"] == "person":
-            sx, sy = P(*p)
-            c.saveState()
-            c.setFillColor(HexColor("#E6E6E6"))
-            c.circle(sx, Y(sy), 6 * k, stroke=0, fill=1)
-            c.restoreState()
-            continue
-        aw, ah = a["size"]
-        color = HexColor(a["color"])
-        if saturation < 1 and not accent:
-            color = mix(color, HexColor("#555555"), 1 - saturation)
-        drect(p[0] - aw / 2, p[1] - ah / 2, aw, ah, color, HexColor("#151515"), 1, 3)
-        if accent:
-            sx, sy = P(p[0] - aw / 2 - 5, p[1] - ah / 2 - 5)
-            rect(c, sx, sy, (aw + 10) * k, (ah + 10) * k, stroke=accent, width=3 * k * vw / 960, radius=4 * k)
-            lx, ly = P(p[0] + aw / 2 + 8, p[1] - ah / 2 - 24 * vw / 960)
-            text(c, f"#{a['track_id']}", lx, ly, "Mono-Medium", 18 * k * vw / 960, accent)
-    for at, r, color in rings:
-        sx, sy = P(*at)
-        c.saveState()
-        c.setStrokeColor(color)
-        c.setLineWidth(3 * k * vw / 960)
-        c.circle(sx, Y(sy), r * k, stroke=1, fill=0)
-        c.restoreState()
-    c.restoreState()
-    rect(c, x, y, w, h, stroke=LINE, width=1, radius=14)
-
-
-def mix(a, b, k):
-    return HexColor("#{:02x}{:02x}{:02x}".format(*(int(255 * (getattr(a, ch) * (1 - k) + getattr(b, ch) * k)) for ch in ("red", "green", "blue"))))
-
-
-# ------------------------------------------------------------ data helpers
-
-E1 = M["events"][0]
-INC = M["incidents"][0] if M["incidents"] else None
-LINKED = next((e for e in M["events"] if INC and e["event_id"] == INC["associated_prediction_event_id"]), None)
-FPS = M["source"]["frame"]["fps"]
+FR = R["source"]["frame"]
+FW, FH, FPS = FR["width"], FR["height"], FR["fps"]
+CASE, INC = R["case"], R["case_incident"]
+IA, IB = CASE["track_ids"]
+COUNTS = R["counts"]
 SIGNALS = {
     "persistent_bounding_box_contact": "Persistent box contact",
     "significant_bounding_box_overlap": "Significant box overlap",
@@ -346,29 +223,20 @@ SIGNALS = {
     "stopped_after_contact": "Stopped after contact",
     "post_contact_track_loss": "Track lost after contact",
 }
+NB = " "  # keeps a number and its unit on one line
+LOW_GREY = HexColor("#78716C")
 
 
-def arrivals():
-    eta = E1["measurement"]["eta_seconds"]
-    if None not in eta:
-        return tuple(eta)
-    for bullet in E1["explanation"]["bullets"]:
-        m = re.search(r"reach it in ([\d.]+)s and .*? in ([\d.]+)s", bullet)
-        if m:
-            return float(m.group(1)), float(m.group(2))
-    return None
+def boxes_at(f):
+    return R["frames"][f] if 0 <= f < len(R["frames"]) else []
 
 
-def clock(seconds):
-    return f"00:{seconds:05.2f}"
-
-
-NB = "\u00a0"  # keeps a number and its unit on one line
+def box_of(f, tid):
+    return next((b for b in boxes_at(f) if b[0] == tid), None)
 
 
 def fit_view(points, pad, aspect):
-    """Same as fitView in scenes.js: smallest frame view holding every point plus padding."""
-    fw, fh = M["source"]["frame"]["width"], M["source"]["frame"]["height"]
+    """Same as DECK_SYNC.fitView in sync.js."""
     xs, ys = [p[0] for p in points], [p[1] for p in points]
     x0, x1, y0, y1 = min(xs) - pad, max(xs) + pad, min(ys) - pad, max(ys) + pad
     if (x1 - x0) / (y1 - y0) < aspect:
@@ -378,11 +246,119 @@ def fit_view(points, pad, aspect):
         g = ((x1 - x0) / aspect - (y1 - y0)) / 2
         y0, y1 = y0 - g, y1 + g
     w, h = x1 - x0, y1 - y0
-    if w <= fw:
-        x0 = max(0, min(x0, fw - w))
-    if h <= fh:
-        y0 = max(0, min(y0, fh - h))
+    if w <= FW:
+        x0 = max(0, min(x0, FW - w))
+    if h <= FH:
+        y0 = max(0, min(y0, FH - h))
     return [x0, y0, w, h]
+
+
+def real_frame(c, x, y, w, h, frame, view, focus, override=None, trail_frames=0, lines=(), rings=(), frozen=False):
+    """Exact-frame still (OpenCV-decoded from the real clip) with the stored boxes of that frame.
+
+    Mirrors realClip() in scenes.js: cover crop of `view`, faint boxes for every
+    tracked row, focus tracks in colour with labels, optional trails/lines/rings.
+    """
+    from io import BytesIO
+
+    from PIL import Image, ImageEnhance
+
+    rel = R["assets"]["stills"][str(frame)].removeprefix("assets/")
+    path = asset(rel)
+    vx, vy, vw, vh = view
+    k = max(w / vw, h / vh)
+    ox, oy = x + (w - vw * k) / 2 - vx * k, y + (h - vh * k) / 2 - vy * k
+    P = lambda px, py: (ox + px * k, oy + py * k)  # noqa: E731 - source px -> stage
+    rect(c, x, y, w, h, fill=HexColor("#000000"), radius=14)
+    clip(c, x, y, w, h, 14)
+    if path:
+        img = Image.open(path).convert("RGB")
+        if frozen:
+            img = ImageEnhance.Brightness(ImageEnhance.Color(img).enhance(0.45)).enhance(0.82)
+        buf = BytesIO()
+        img.save(buf, "JPEG", quality=90)
+        buf.seek(0)
+        c.drawImage(ImageReader(buf), ox, Y(oy + FH * k), FW * k, FH * k)
+    rows = [list(b) for b in boxes_at(frame)]
+    for tid, b in (override or {}).items():
+        rows = [r for r in rows if r[0] != int(tid)] + [[int(tid), *b]]
+
+    def line(a, b, color, width, alpha=1.0):
+        c.saveState()
+        c.setStrokeColor(color)
+        c.setStrokeAlpha(alpha)
+        c.setLineWidth(width)
+        c.setLineCap(1)
+        c.setLineJoin(1)
+        (ax, ay), (bx, by) = P(*a), P(*b)
+        c.line(ax, Y(ay), bx, Y(by))
+        c.restoreState()
+
+    for tid, x1, y1, x2, y2 in rows:
+        if tid in focus:
+            continue
+        sx, sy = P(x1, y1)
+        c.saveState()
+        c.setStrokeColor(WHITE)
+        c.setStrokeAlpha(0.42)
+        c.setLineWidth(1.5)
+        c.rect(sx, Y(sy + (y2 - y1) * k), (x2 - x1) * k, (y2 - y1) * k, stroke=1, fill=0)
+        c.restoreState()
+    for tid, color in focus.items():
+        if trail_frames:
+            pts = [((b[1] + b[3]) / 2, b[4]) for f in range(frame - trail_frames, frame + 1) if (b := box_of(f, tid))]
+            for a, b in zip(pts, pts[1:]):
+                line(a, b, color, 3, 0.8)
+    for a, b, color in lines:
+        line(a, b, color, 3.5)
+    for at, r, color in rings:
+        sx, sy = P(*at)
+        c.saveState()
+        c.setStrokeColor(color)
+        c.setLineWidth(3.5)
+        c.circle(sx, Y(sy), r, stroke=1, fill=0)
+        c.restoreState()
+    for tid, x1, y1, x2, y2 in rows:
+        color = focus.get(tid)
+        if not color:
+            continue
+        sx, sy = P(x1, y1)
+        rect(c, sx, sy, (x2 - x1) * k, (y2 - y1) * k, stroke=color, width=3.5)
+        label = f"{R['classes'][str(tid)]} #{tid}"
+        c.saveState()
+        obj = c.beginText()
+        obj.setFont("Mono-Medium", 20)
+        obj.setTextRenderMode(1)
+        c.setStrokeColor(INK)
+        c.setLineWidth(5)
+        c.setLineJoin(1)
+        obj.setTextOrigin(sx, Y(sy - 9))
+        obj.textOut(label)
+        c.drawText(obj)
+        c.restoreState()
+        c.saveState()
+        c.setFillColor(color)
+        obj = c.beginText()
+        obj.setFont("Mono-Medium", 20)
+        obj.setTextOrigin(sx, Y(sy - 9))
+        obj.textOut(label)
+        c.drawText(obj)
+        c.restoreState()
+    c.restoreState()
+    rect(c, x, y, w, h, stroke=LINE, width=1, radius=14)
+    occupy(y + h, f"real frame {frame}")
+
+
+def tag_right(c, s, right, y, color=AMBER, solid=False, size=18):
+    label = s.upper()
+    w = pdfmetrics.stringWidth(label, "Mono-Medium", size) + 2 * (len(label) - 1) + 24
+    return tag(c, s, right - w, y, color, solid, size)
+
+
+def card(c, x, y, w, h, color=None):
+    rect(c, x, y, w, h, fill=CARD, radius=6)
+    if color is not None:
+        rect(c, x, y, 4, h, fill=color)
 
 
 def page_header(c, kick, parts, kcolor=AMBER, size=60):
@@ -391,7 +367,11 @@ def page_header(c, kick, parts, kcolor=AMBER, size=60):
 
 
 def footer(c, n):
-    text(c, f"NearMiss · {n}/8", 1860, 40, "Mono", 14, HexColor("#78716C"), anchor="right")
+    text(c, f"NearMiss · {n}/8 · real footage, experimental flags", 1860, 40, "Mono", 14, HexColor("#78716C"), anchor="right")
+
+
+def sec(v, d=2):
+    return f"{v:.{d}f}{NB}s"
 
 
 # ------------------------------------------------------------ slides
@@ -403,18 +383,22 @@ def slide1(c):
         image_cover(c, hero, 0, 0, W, H)
     shade(c, 0.25, 0.95)
     text(c, "Illustrative image · not analyzed footage", 1860, BAND_TOP - 8 - 18, "Mono", 18, MUTED, anchor="right")
-    freeze_t = 3.45
-    ida, idb = E1["track_ids"]
-    intersection(c, 760, 110, 1040, 585, [0, 0, 960, 540], freeze_t, {ida: AMBER, idb: AMBER}, trail_from=1.6,
-                 rings=[(E1["conflict_point"], 26, CORAL)], saturation=0.35)
+    m1 = R["moments"]["slide1"]
+    f = m1["freeze_frame"]
+    real_frame(c, 760, 110, 1040, 585, f, [0, 0, FW, FH], {IA: AMBER, IB: AMBER}, frozen=True)
     x = 776
-    x += tag(c, "Synthetic demo", x, 126, solid=True) + 10
-    tag(c, "Scripted tracks · nearmiss/demo.py", x, 126)
-    tw = pdfmetrics.stringWidth(f"FRAME {round(freeze_t * FPS):03d} · {clock(freeze_t)}".upper(), "Mono-Medium", 18) + 2 * 20 + 24
-    tag(c, f"Frame {round(freeze_t * FPS):03d} · {clock(freeze_t)}", 1782 - tw, 524, CORAL)
-    text(c, f"car #{idb} brakes and stops short. No contact.", 1782, 568, "Sans", 26, WHITE, anchor="right")
-    text(c, f"The warning came first: {E1['first_alert_clock']} · {E1['severity']}", 1782, 604, "Sans", 26, AMBER, anchor="right")
-    text(c, f"arrival gap {E1['arrival_gap_seconds']:.2f}{NB}s, measured at {E1['measurement']['clock']}", 1782, 640, "Sans", 26, AMBER, anchor="right")
+    x += tag(c, "Real footage", x, 126, solid=True) + 10
+    tag(c, "Actual YOLO11n + ByteTrack boxes · experimental flags", x, 126)
+    credit = "Footage: Mike Bird / Pexels"
+    cw = pdfmetrics.stringWidth(credit, "Mono", 15) + 16
+    rect(c, 776, 695 - 12 - 26, cw, 26, fill=INK, radius=4, alpha=0.72)
+    text(c, credit, 784, 695 - 12 - 22, "Mono", 15, WHITE)
+    lines = [f"Experimental {CASE['severity']} flag · car{NB}#{IA} / car{NB}#{IB}", "Ordinary traffic. Unverified: a person must check."]
+    bw = max(pdfmetrics.stringWidth(s, "Sans", 26) for s in lines) + 32
+    rect(c, 1782 - bw, 695 - 16 - 146, bw, 146, fill=INK, radius=8, alpha=0.8)
+    tag_right(c, f"Frame {f} · {CASE['first_alert_clock']} · first alert", 1766, 695 - 16 - 134, CORAL)
+    text(c, lines[0], 1766, 695 - 16 - 84, "Sans", 26, WHITE, anchor="right")
+    text(c, lines[1], 1766, 695 - 16 - 48, "Sans", 26, AMBER, anchor="right")
     runs(c, [("A near miss disappears", "Sans-Semi", WHITE), ("in seconds.", "Serif-Italic", WHITE)], 120, 708, 1700, 104)
     text(c, "Its evidence shouldn’t.", 120, 830, "Serif-Italic", 124, CORAL)
     footer(c, 1)
@@ -447,151 +431,170 @@ def slide2(c):
     runs(c, [("Srivibhav Padakandla", "Serif-Italic", WHITE), ("·", "Sans", WHITE), ("Aadi Shukla", "Serif-Italic", WHITE)], 120, 730, 900, 64)
     kicker(c, "Who it is for", 1060, 690, MUTED)
     para(c, "People who review intersections: safety staff, and neighbors preparing a street-safety conversation.", 1060, 730, 740, "Sans", 34, WHITE, 1.35)
-    w = tag(c, "Synthetic demo", 120, 920, solid=True)
-    para(c, "Every app scene in this talk uses NearMiss’s labeled demo: generated footage, scripted tracks. No real place, no real crash.",
-         120 + w + 20, 918, 1680 - w - 20, "Sans", 28, WHITE, 1.3)
+    w = tag(c, "Real footage", 120, 920, solid=True)
+    para(c, "Ordinary highway traffic (Mike Bird / Pexels), no incident labels. Boxes and flags are actual NearMiss output: experimental, unverified, human review required.",
+         120 + w + 20, 906, 1680 - w - 20, "Sans", 28, WHITE, 1.35)
     footer(c, 2)
 
 
 def slide3(c):
     rect(c, 0, 0, W, H, fill=INK)
     page_header(c, "How a warning is earned", [("Two projected arrival times.", "Sans-Semi", WHITE), ("One gap.", "Serif-Italic", AMBER)])
-    # Everything here is the representative measurement row (not the first alert):
-    # both road users, both projection origins and the ETAs/gap come from that frame.
-    ida, idb = E1["track_ids"]
-    m = E1["measurement"]
-    t = m["seconds"]
-    cp = E1["conflict_point"]
+    # The representative measurement frame (not the first alert): both boxes, both
+    # projection origins and the ETAs/gap come from that frame.
+    m = CASE["measurement"]
+    cp = CASE["conflict_point"]
     corners = [pt for x1, y1, x2, y2 in m["boxes"].values() for pt in ((x1, y1), (x2, y2))]
-    intersection(c, 120, 330, 900, 640, fit_view([*corners, cp], 56, 900 / 640), t, {ida: AMBER, idb: AMBER}, trail_from=t - 0.8,
-                 dashed=[(m["anchors"][str(ida)], cp, AMBER), (m["anchors"][str(idb)], cp, AMBER)],
-                 rings=[(cp, 12, CORAL)])
+    view = fit_view([*corners, cp], 110, 900 / 640)
+    real_frame(c, 120, 330, 900, 640, m["frame"], view, {IA: AMBER, IB: AMBER}, override=m["boxes"], trail_frames=round(0.8 * FPS),
+               lines=[(m["positions"][str(t)], m["conflict_positions"][str(t)], AMBER) for t in (IA, IB)], rings=[(cp, 16, CORAL)])
     x = 136
-    x += tag(c, "Synthetic demo", x, 346, solid=True) + 10
-    tag(c, f"Diagram · measurement frame {m['frame']} · {m['clock']}", x, 346)
-    arr = arrivals()
+    x += tag(c, "Real footage", x, 346, solid=True) + 10
+    tag(c, f"Measurement frame {m['frame']} · {m['clock']}", x, 346)
+    ea, eb = m["eta_seconds"]
+    gap = CASE["arrival_gap_seconds"]
     side = 1080
-    if arr:
-        text(c, f"car #{ida} reaches the shared point in {arr[0]:.2f}{NB}s", side, 330, "Mono", 30)
-        text(c, f"car #{idb} reaches it in {arr[1]:.2f}{NB}s", side, 378, "Mono", 30)
-    text(c, f"arrival gap {E1['arrival_gap_seconds']:.2f}{NB}s → {E1['severity']}", side, 426, "Mono", 30, CORAL)
-    text(c, f"Measured at {m['clock']} (frame{NB}{m['frame']}). First alert {E1['first_alert_clock']} (frame{NB}{E1['first_alert_frame']}).",
-         side, 478, "Mono", 19, MUTED)
-    s = M["settings"]
+    text(c, f"car #{IA} reaches the shared point in {sec(ea)}", side, 330, "Mono", 30)
+    text(c, f"car #{IB} reaches it in {sec(eb)}", side, 378, "Mono", 30)
+    text(c, f"arrival gap {sec(gap)} → {CASE['severity']}", side, 426, "Mono", 30, CORAL)
+    stale = [f"#{tid} box from frame{NB}{f}" for tid, f in m["observed_frame"].items() if f != m["frame"]]
+    when = (f"Measured on frame{NB}{m['frame']} ({m['clock']}). First alert frame{NB}{CASE['first_alert_frame']} ({CASE['first_alert_clock']})."
+            + (f" {', '.join(stale)} (latest observation)." if stale else ""))
+    yy = para(c, when, side, 478, 720, "Mono", 19, MUTED, 1.4)
+    s = R["pipeline"]["settings"]
     hi, me, lo = s["high_time_gap_seconds"], s["medium_time_gap_seconds"], s["low_time_gap_seconds"]
     rw = 720
     X = lambda v: side + v / lo * rw  # noqa: E731
-    ry = 556
+    ry = yy + 36
     rect(c, side, ry + 34, X(hi) - side, 26, fill=CORAL)
     rect(c, X(hi), ry + 34, X(me) - X(hi), 26, fill=AMBER)
     rect(c, X(me), ry + 34, X(lo) - X(me), 26, fill=HexColor("#57534E"))
     text(c, f"HIGH ≤ {hi:.2f} s", (side + X(hi)) / 2, ry + 72, "Mono", 18, MUTED, "center")
     text(c, f"MEDIUM ≤ {me:.2f} s", (X(hi) + X(me)) / 2, ry + 72, "Mono", 18, MUTED, "center")
     text(c, f"LOW ≤ {lo:.2f} s", (X(me) + X(lo)) / 2, ry + 72, "Mono", 18, MUTED, "center")
-    mx = X(E1["arrival_gap_seconds"])
+    mx = X(gap)
     rect(c, mx, ry, 4, 70, fill=WHITE)
-    text(c, f"gap {E1['arrival_gap_seconds']:.2f} s", mx + 12, ry - 6, "Mono-Medium", 22)
-    image_crop(c, "captures/warning.png", side, 736, 720, 138, 1280, -350, -196,
-               caption="Actual app · Analysis → “Why each warning was raised”")
-    text(c, "Image-space pixels and constant-velocity projection. Not a measured speed, distance or collision probability.", 120, BAND_TOP - 8 - 20, "Sans", 20, MUTED)
+    text(c, f"gap {gap:.2f} s", mx + 12, ry - 6, "Mono-Medium", 22)
+    ex = CASE["explanation"]
+    cy = ry + 150
+    bullets = ex["bullets"][1:3]
+    lines = simpleSplit(ex["headline"], "Sans-Bold", 21, 680)
+    blines = [simpleSplit(b, "Sans", 19, 660) for b in bullets]
+    ch = 28 + len(lines) * 29 + sum(len(b) for b in blines) * 26 + 8
+    card(c, side, cy, 720, ch, CORAL)
+    ty = para(c, ex["headline"], side + 18, cy + 14, 680, "Sans-Bold", 21, WHITE, 1.38) + 4
+    for b in bullets:
+        text(c, "•", side + 20, ty, "Sans", 19, MUTED)
+        ty = para(c, b, side + 38, ty, 660, "Sans", 19, HexColor("#D6D3D1"), 1.38)
+    text(c, "Actual explain_event() output · the app’s “Why each warning was raised” text", side, cy + ch + 10, "Mono", 15, MUTED)
+    text(c, "Image pixels, constant-velocity projection: in perspective, two cars in one lane can “meet”. Not a measured speed, distance or probability.",
+         120, BAND_TOP - 8 - 20, "Sans", 20, MUTED)
     footer(c, 3)
 
 
 def slide4(c):
     rect(c, 0, 0, W, H, fill=INK)
     page_header(c, "Inspect the source", [("Every flag points back to", "Sans-Semi", WHITE), ("the exact frame.", "Serif-Italic", AMBER)])
-    s = 1616 / 1600
     # deck.css scales .source-media to 0.9 about its top-left corner to clear the HUD band.
     c.saveState()
     c.translate(120, Y(330))
     c.scale(0.9, 0.9)
     c.translate(-120, -Y(330))
     page.update(oy=330, k=0.9)
-    image_crop(c, "captures/investigation.png", 120, 330, 1160, 653, 1616, -436, 0, radius=14)
-    rect(c, 120 + (815 - 432) * s - 8, 330 + 586 * s - 8, 380 * s + 16, 18 * s + 16, stroke=AMBER, width=4, radius=8)
-    duration = M["source"]["frame"]["duration_seconds"]
-    items = [(e["first_alert_seconds"], e["first_alert_clock"], e["severity"], CORAL if e["severity"] == "HIGH" else AMBER,
-              f"{e['explanation']['pattern_label']} · " + " / ".join(f"{cl} #{tid}" for cl, tid in zip(e["classes"], e["track_ids"])),
-              f"time headway {e['time_headway_seconds']:.2f} s" if e["geometry"] == "same_direction_following" and e["time_headway_seconds"] is not None
-              else f"arrival gap {e['arrival_gap_seconds']:.2f} s") for e in M["events"]]
-    items += [(i["first_contact_seconds"], i["first_contact_clock"], "Contact", CORAL, "Suspected contact · vehicles #" + " / #".join(map(str, i["track_ids"])),
-               f"{i['evidence_signal_count']} supporting signals · needs review") for i in M["incidents"]]
-    items.sort(key=lambda it: it[0])
+    k = 1.028
+    image_crop(c, "real/investigation.png", 120, 330, 1160, 653, 1440 * k, -306 * k, -250 * k, radius=14)
+    rect(c, 120 + (732 - 306) * k - 10, 330 + (861 - 250) * k - 9, 276 * k + 20, 18 * k + 18, stroke=AMBER, width=4, radius=8)
+    duration = FR["duration_seconds"]
+    sev = lambda s: CORAL if s == "HIGH" else AMBER if s == "MEDIUM" else LOW_GREY  # noqa: E731
+    marks = [(e["first_alert_seconds"], sev(e["severity"]), False) for e in R["events"]] + [(i["first_contact_seconds"], CORAL, True) for i in R["incidents"]]
     ty = 330 + 653 + 16
     rect(c, 120, ty + 18, 1160, 4, fill=LINE, radius=2)
-    rect(c, 120, ty + 18, 1160 * E1["first_alert_seconds"] / duration, 4, fill=WHITE, radius=2)
-    for t, *_rest in items:
-        color = _rest[2]
+    rect(c, 120, ty + 18, 1160 * CASE["first_alert_seconds"] / duration, 4, fill=WHITE, radius=2)
+    for t, color, contact in sorted(marks, key=lambda m: m[0]):
         cx = 120 + 1160 * t / duration
         c.saveState()
-        c.setFillColor(INK)
+        c.setFillColor(CORAL if contact else INK)
         c.setStrokeColor(color)
         c.setLineWidth(3)
         c.circle(cx, Y(ty + 20), 11, stroke=1, fill=1)
         c.restoreState()
-    text(c, "Actual app · Investigation · frame view with stored observations", 120, ty + 46, "Mono", 17, MUTED)
+    text(c, "Actual app · Investigation · original frame 34, tracks #20 and #22, stored observations only", 120, ty + 46, "Mono", 17, MUTED)
     c.restoreState()
     page.update(oy=0, k=1.0)
+    bs = COUNTS["warnings_by_severity"]
     y = 330
-    for _t, clk, sev, color, title, detail in items:
-        rect(c, 1320, y, 480, 112, fill=CARD, radius=6)
-        rect(c, 1320, y, 4, 112, fill=color)
+    card(c, 1320, y, 480, 126)
+    for i, (n, label, sub) in enumerate(((COUNTS["warnings"], "warning candidates", f"{bs['HIGH']} HIGH · {bs['MEDIUM']} MEDIUM · {bs['LOW']} LOW"),
+                                         (COUNTS["suspected_incidents"], "suspected contacts", f"{COUNTS['confirmed']} confirmed"),
+                                         (COUNTS["track_ids"], "tracker IDs", "not a vehicle count"))):
+        ly = y + 10 + i * 36
+        nw = text(c, str(n), 1336, ly, "Mono-Medium", 26)
+        lw = text(c, label, 1336 + nw + 10, ly + 3, "Sans", 21)
+        text(c, sub, 1336 + nw + lw + 18, ly + 6, "Sans", 17, MUTED)
+    y += 138
+    cap = R["capture_event"]
+    cards = [(cap["first_alert_clock"], cap["severity"], sev(cap["severity"]), f"{cap['pattern_label']} · car #{cap['track_ids'][0]} / car #{cap['track_ids'][1]}", "Opened in Investigation (frame 34)"),
+             (CASE["first_alert_clock"], CASE["severity"], sev(CASE["severity"]), f"{CASE['pattern_label']} · car #{IA} / car #{IB}", f"arrival gap {sec(CASE['arrival_gap_seconds'])} · slide 3"),
+             (INC["first_contact_clock"], "Contact", CORAL, f"Suspected contact · car #{INC['track_ids'][0]} / car #{INC['track_ids'][1]}", f"{INC['evidence_signal_count']} signals · unverified · slide 5")]
+    for clk, tg, color, title, detail in cards:
+        card(c, 1320, y, 480, 112, color)
         text(c, clk, 1340, y + 12, "Mono", 22)
-        tag(c, sev, 1800 - 16 - (pdfmetrics.stringWidth(sev.upper(), "Mono-Medium", 14) + 2 * (len(sev) - 1) + 24), y + 10, color, size=14)
+        tag_right(c, tg, 1800 - 16, y + 10, color, size=14)
         para(c, title, 1340, y + 46, 450, "Sans", 20, WHITE, 1.25)
         text(c, detail, 1340, y + 80, "Sans", 18, MUTED)
         y += 124
-    para(c, f"Jump to evidence opens frame {round(E1['first_alert_seconds'] * FPS)} ({E1['first_alert_clock']}), the first alert, with tracks "
-            f"#{' and #'.join(map(str, E1['track_ids']))} selected. Boxes are stored observations; nothing is re-detected.",
-         1320, y + 10, 480, "Sans", 21, WHITE, 1.4)
+    para(c, f"Investigation redraws the stored boxes on the original frame; nothing is re-detected. Shown: frame{NB}34 for cars #20 and #22, "
+            f"whose {cap['severity']} flag first fired on frame{NB}{cap['first_alert_frame']}.", 1320, y + 6, 480, "Sans", 21, WHITE, 1.4)
     footer(c, 4)
 
 
 def slide5(c):
     rect(c, 0, 0, W, H, fill=INK)
     page_header(c, "Human review", [("Contact needs more than overlap.", "Sans-Semi", WHITE), ("A person decides.", "Serif-Italic", AMBER)], kcolor=CORAL)
-    if INC:
-        a, b = INC["track_ids"]
-        intersection(c, 120, 330, 980, 640, [300, 110, 290, 187], INC["first_contact_seconds"], {a: CORAL, b: CORAL},
-                     trail_from=INC["first_contact_seconds"] - 1.4, rings=[(INC["contact_point"], 16, CORAL)])
-        x = 136
-        x += tag(c, "Synthetic demo", x, 346, solid=True) + 10
-        tag(c, "Diagram · half speed", x, 346)
-        label = f"First contact {INC['first_contact_clock']}"
-        lw = pdfmetrics.stringWidth(label.upper(), "Mono-Medium", 18) + 2 * (len(label) - 1) + 24
-        tag(c, label, 1100 - 16 - lw, 970 - 16 - 32, CORAL, solid=True)
-        y = 330
-        for sname in INC["detection_signals"]:
-            c.saveState()
-            c.setFillColor(CORAL)
-            c.circle(1156, Y(y + 18), 6.5, stroke=0, fill=1)
-            c.restoreState()
-            text(c, SIGNALS.get(sname, sname.replace("_", " ")), 1176, y + 2, "Sans", 28)
-            y += 44
-        if LINKED:
-            y = para(c, f"Prediction {LINKED['event_id']} came {INC['prediction_lead_seconds']:.2f} s before first contact, but does not decide this. "
-                        "Correlated measurements, not independent votes.", 1176, y + 4, 620, "Sans", 22, AMBER, 1.35)
-    else:
-        text(c, "No suspected incident in this run.", 120, 400, "Sans", 36)
-        y = 330
-    dy = y + 20
-    colw = (650 - 24) / 3
-    for i, (name, sub) in enumerate((("Confirm", "creates one local, simulated notice"), ("Dismiss", "no notice"), ("Uncertain", "no notice"))):
-        x = 1150 + i * (colw + 12)
-        rect(c, x, dy, colw, 96, fill=HexColor("#1A1610") if i == 0 else None, stroke=AMBER if i == 0 else LINE, width=1.5, radius=8)
-        text(c, name, x + 14, dy + 12, "Sans-Semi", 24)
-        para(c, sub, x + 14, dy + 46, colw - 24, "Sans", 17, MUTED, 1.25)
-    image_crop(c, "captures/incidents.png", 1150, dy + 116, 650, 170, 1733, -1083, -639,
-               caption="Actual app · Incidents (review recorded on the synthetic demo)")
+    f0 = R["moments"]["slide5"]["freeze_frame"]
+    corners = [pt for tid in INC["track_ids"] if (b := box_of(f0, tid)) for pt in ((b[1], b[2]), (b[3], b[4]))]
+    view = fit_view([*corners, INC["contact_point"]], 120, 980 / 640)
+    a, b = INC["track_ids"]
+    real_frame(c, 120, 330, 980, 640, f0, view, {a: CORAL, b: CORAL}, trail_frames=12, rings=[(INC["contact_point"], 18, CORAL)], frozen=True)
+    x = 136
+    x += tag(c, "Real footage", x, 346, solid=True) + 10
+    tag(c, "Half speed · stored boxes", x, 346)
+    tag_right(c, f"First box contact · frame {f0} · {INC['first_contact_clock']}", 1100 - 16, 970 - 16 - 32, CORAL, solid=True)
+    y = 330
+    for sname in INC["detection_signals"]:
+        c.saveState()
+        c.setFillColor(CORAL)
+        c.circle(1156, Y(y + 16), 6.5, stroke=0, fill=1)
+        c.restoreState()
+        text(c, SIGNALS.get(sname, sname.replace("_", " ")), 1176, y + 2, "Sans", 25)
+        y += 38
+    if INC["associated_prediction_event_id"]:
+        y = para(c, f"Warning {INC['associated_prediction_event_id']} came {sec(INC['prediction_lead_seconds'])} before first contact. "
+                    "Correlated measurements, not independent votes.", 1176, y + 2, 624, "Sans", 20, AMBER, 1.35)
+    y += 16
+    secs = INC["contact_persistence_frames"] / FPS
+    read = (f"Box “contact” lasted {INC['contact_persistence_frames']} frames ({secs:.1f}{NB}s). #{IB} is the nearer car in the same lane, "
+            f"partly hiding #{IA}: overlap from perspective. It looks like queued traffic, not contact.")
+    status = f"App: {COUNTS['suspected_incidents']} candidates Uncertain · {COUNTS['confirmed']} confirmed · {COUNTS['notices']} notices"
+    rl = simpleSplit(read, "Sans", 21, 610)
+    sl = simpleSplit(status, "Mono", 17, 610)
+    rh = 12 + 22 + len(rl) * 29.4 + 6 + len(sl) * 22 + 12
+    card(c, 1150, y, 650, rh, AMBER)
+    text(c, "OUR READING OF THE FRAME · NOT A RECORDED REVIEW", 1168, y + 12, "Mono-Medium", 15, AMBER, spacing=2)
+    yy = para(c, read, 1168, y + 34, 610, "Sans", 21, WHITE, 1.4)
+    para(c, status, 1168, yy + 6, 610, "Mono", 17, MUTED, 1.3)
+    y += rh + 16
+    image_crop(c, "real/incidents.png", 1150, y, 360, 216, 1440, -1046, -340,
+               caption="Actual app · Incidents review controls on this clip")
     footer(c, 5)
 
 
 def brief_excerpt():
-    if not BRIEF:
+    brief = R.get("brief")
+    if not brief:
         return None
-    lines = BRIEF.split("\n")
+    lines = brief.split("\n")
     title = next((l for l in lines if l.startswith("# ")), "")[2:]
-    quote = next((l for l in lines if l.startswith(">")), "").lstrip("> ").strip()
 
     def section(name):
         out, on = [], False
@@ -599,60 +602,79 @@ def brief_excerpt():
             if l.startswith("## "):
                 on = l == f"## {name}"
                 continue
-            if on and l.strip():
-                out.append(l)
+            if on and l.startswith("- "):
+                out.append(l[2:])
         return out
 
-    clean = lambda s: re.sub(r"\\(.)", r"\1", s).replace("**", "")  # noqa: E731
-    first_para = lambda name: next((l for l in section(name) if not l.startswith(("-", "|", ">"))), "")  # noqa: E731
-    bullets = [l[2:] for l in section("What this brief does not claim") if l.startswith("- ")][:3]
-    return clean(title), clean(quote), clean(first_para("Human review")), clean(first_para("Simulated dispatch")), [clean(b) for b in bullets]
+    clean = lambda s: re.sub(r"\s*\(https?:[^)]*\)", "", re.sub(r"\\(.)", r"\1", s)).replace("**", "")  # noqa: E731
+    credit = next((l[2:] for l in lines[:12] if l.startswith("- Real traffic footage")), "")
+    summary = [l for l in section("Evidence summary") if re.match(r"^(Vehicles|Potential|Suspected)", l)]
+    return clean(title), clean(credit), [clean(l) for l in summary], [clean(l) for l in section("Boundaries")[:2]]
 
 
 def slide6(c):
     rect(c, 0, 0, W, H, fill=INK)
-    page_header(c, "From evidence to follow-up", [("One local notice, a plan, and", "Sans-Semi", WHITE), ("a brief anyone can check.", "Serif-Italic", AMBER)])
+    page_header(c, "From evidence to follow-up", [("No confirmation, no notice.", "Sans-Semi", WHITE), ("A plan anyone can check.", "Serif-Italic", AMBER)])
     colw = (1680 - 80) / 3
     x1, x2, x3 = 120, 120 + colw + 40, 120 + 2 * (colw + 40)
-    image_crop(c, "captures/dispatch.png", x1, 330, colw, 560, 1500, -405, -173, caption="Actual app · Dispatch · local simulation, nothing sent")
-    cr = M["streetlab"]["crossing"]
+    kicker(c, "Dispatch · only after Confirm", x1, 330, AMBER, 18)
+    gy = 366
+    card(c, x1, gy, colw, 214)
+    cx = x1 + 20
+    for i, (label, color) in enumerate((("Candidate", LINE), ("Person confirms", CORAL), ("Local notice", LINE))):
+        lw = pdfmetrics.stringWidth(label, "Sans", 19) + 18
+        if cx + lw > x1 + colw - 16:
+            cx, gy = x1 + 20, gy + 46
+        rect(c, cx, gy + 18, lw, 36, stroke=color, width=1.5, radius=6)
+        text(c, label, cx + 9, gy + 25, "Sans", 19)
+        cx += lw + 8
+        if i < 2:
+            cx += text(c, "→", cx, gy + 25, "Sans", 19, MUTED) + 8
+    gy = 366
+    text(c, "Simulated: nothing leaves the computer.", x1 + 20, gy + 112, "Sans", 19, MUTED)
+    rect(c, x1 + 20, gy + 146, colw - 40, 1, fill=LINE)
+    for i, (n, label) in enumerate(((COUNTS["suspected_incidents"], "candidates"), (COUNTS["confirmed"], "confirmed"), (COUNTS["notices"], "notices"))):
+        bx = x1 + 20 + i * (colw - 40) / 3
+        text(c, str(n), bx, gy + 152, "Mono-Medium", 44)
+        text(c, label, bx + 34 * len(str(n)) + 4, gy + 172, "Sans", 18, MUTED)
+    image_crop(c, "real/streetlab.png", x1, gy + 240, colw, 112, 792, -185, -383, caption="Actual app · Street Lab summary for this clip")
+    cr = R["streetlab"]["crossing"]
     a = cr["assumptions"]
-    kicker(c, "Street Lab · crossing-time arithmetic", x2, 330, AMBER, 18)
+    kicker(c, "Street Lab · crossing arithmetic", x2, 330, AMBER, 18)
     max_s = max(r["current_seconds"] for r in cr["rows"])
     y = 370
     for r in cr["rows"]:
         text(c, f"{r['walker']} · {r['speed']} {a['unit']}/s", x2, y, "Sans", 24)
-        for label, value, color in (("now", r["current_seconds"], HexColor("#78716C")), ("hypothetical", r["proposed_seconds"], AMBER)):
+        for label, value, color in (("now", r["current_seconds"], LOW_GREY), ("hypothetical", r["proposed_seconds"], AMBER)):
             y += 40
             bw = value / max_s * 330
             rect(c, x2, y, bw, 30, fill=color, radius=3)
             text(c, f"{value} s {label}", x2 + bw + 12, y + 4, "Mono", 20)
         y += 64
-    para(c, f"{a['current_distance']} → {a['proposed_distance']} {a['unit']} crossing · start-up {a['start_up_seconds']} s · placeholder assumptions", x2, y, colw, "Mono", 18, MUTED, 1.35)
-    para(c, "Arithmetic on entered assumptions. Not a measured crash reduction.", x2, y + 60, colw, "Sans", 20, CORAL, 1.4)
-    kicker(c, "Actual export · evidence brief (.md)", x3, 330, AMBER, 18)
+    y = para(c, f"Stated assumptions: {a['current_distance']} → {a['proposed_distance']} {a['unit']} crossing · start-up {a['start_up_seconds']} s", x2, y, colw, "Mono", 18, MUTED, 1.4)
+    para(c, "Arithmetic on entered assumptions. Not a road-safety measurement or crash reduction.", x2, y + 14, colw, "Sans", 20, CORAL, 1.4)
+    kicker(c, "Actual export · community brief", x3, 330, AMBER, 18)
     rect(c, x3, 366, colw, 560, fill=PAPER, radius=10)
     ex = brief_excerpt()
     if ex:
-        title, quote, review, dispatch, bullets = ex
+        title, credit, summary, bounds = ex
         clip(c, x3, 366, colw, 560, 10)
-        yy = para(c, title, x3 + 26, 390, colw - 52, "Serif-Italic", 28, PAPER_INK, 1.15) + 6
-        qh = len(simpleSplit(quote, "Sans", 15, colw - 80)) * 15 * 1.4 + 14
+        yy = para(c, title, x3 + 26, 390, colw - 52, "Serif-Italic", 30, PAPER_INK, 1.15) + 6
+        qh = len(simpleSplit(credit, "Sans", 16, colw - 80)) * 16 * 1.45 + 14
         rect(c, x3 + 26, yy, colw - 52, qh, fill=HexColor("#FBEBD0"))
         rect(c, x3 + 26, yy, 5, qh, fill=AMBER)
-        para(c, quote, x3 + 40, yy + 7, colw - 80, "Sans", 15, PAPER_INK, 1.4)
+        para(c, credit, x3 + 40, yy + 7, colw - 80, "Sans", 16, PAPER_INK, 1.45)
         yy += qh + 12
-        for head, body in (("Human review", review), ("Simulated dispatch", dispatch)):
-            text(c, head, x3 + 26, yy, "Sans-Bold", 17, PAPER_INK)
-            yy = para(c, body, x3 + 26, yy + 26, colw - 52, "Sans", 15, PAPER_INK, 1.4) + 8
-        text(c, "What this brief does not claim", x3 + 26, yy, "Sans-Bold", 17, PAPER_INK)
-        yy += 26
-        for bl in bullets:
-            yy = para(c, "• " + bl, x3 + 26, yy, colw - 52, "Sans", 15, PAPER_INK, 1.4)
+        for head, items in (("Evidence summary", summary), ("Boundaries", bounds)):
+            text(c, head, x3 + 26, yy, "Sans-Bold", 19, PAPER_INK)
+            yy += 28
+            for item in items:
+                yy = para(c, "• " + item, x3 + 26, yy, colw - 52, "Sans", 17, PAPER_INK, 1.45) + 4
+            yy += 8
         c.restoreState()
     else:
-        text(c, "Host capture pending: brief.md", x3 + 26, 400, "Mono", 20, CORAL)
-    para(c, "Street Lab’s community brief and the Analysis PDF report are separate exports.", x3, 940, colw, "Sans", 20, MUTED, 1.4)
+        text(c, "Host capture pending: community-brief.md", x3 + 26, 400, "Mono", 20, CORAL)
+    para(c, "Downloaded from Street Lab on this clip; no review decisions changed.", x3, 940, colw, "Sans", 20, MUTED, 1.4)
     footer(c, 6)
 
 
@@ -663,16 +685,22 @@ def slide7(c):
     total = 1680 - 2 * 56
     widths = [total * 1.15 / 3.15, total / 3.15, total / 3.15]
     xs = [120, 120 + widths[0] + 56, 120 + widths[0] + widths[1] + 112]
-    t = M.get("tests")
+    t = R.get("tests")
     verified = [
-        f"Automated tests: {re.sub(r' in [0-9.]+s$', '', t['summary'])} (local pytest, {t['run_at'][:10]})" if t else "Automated tests: not recorded for this build",
-        f"Deterministic demo: ID {M['source']['video_id']}; {len(M['events'])} warnings and {len(M['incidents'])} suspected incident every run at default settings",
-        "Annotated clip regenerated for this deck matches the app’s cached render byte for byte",
-        "Synthetic label carried through frames, pages and exports",
-        "Confirm, dismiss and acknowledge states covered by the tests (SQLite review record)",
+        ((f"All {m.group(1)} automated tests pass" if t["exit_code"] == 0 and (m := re.match(r"(\d+) passed", t["summary"])) else f"pytest: {re.sub(r' in [0-9.]+s.*$', '', t['summary'])}")
+         + f" (local, {t['run_at'][:10]}). They check code behaviour, not detector accuracy" if t else "Automated tests: not recorded for this build"),
+        f"Replay from the cached tracks reproduces the app’s {COUNTS['warnings']} warnings and {COUNTS['suspected_incidents']} contact candidates exactly",
+        "Clip, tracks and metadata bound by SHA-256 in the app manifest; the deck checks them",
+        "Real-footage label and credit carried on frames, pages and exports",
+        "Confirm, dismiss and uncertain states covered by tests (SQLite review record)",
     ]
-    unproven = ["Accuracy on real-world footage has not been measured", "Image pixels only: no calibrated metres, speeds or probabilities",
-                "No crash-reduction or safety-rating claim", "Dispatch is simulated; nothing leaves the computer", "One camera view, short clips"]
+    unproven = [
+        "Accuracy on real footage: not measured. This clip has no ground-truth labels",
+        f"All {COUNTS['warnings']} warnings and {COUNTS['suspected_incidents']} contact candidates are unverified; perspective and occlusion cause false alarms",
+        f"{COUNTS['track_ids']} tracker IDs are not a vehicle count",
+        "Image pixels only: no metres, speeds or probabilities",
+        "No crash-reduction claim. Dispatch is simulated",
+    ]
     cols = [
         ("Built", AMBER, [("Existing open source", ["Ultralytics YOLO: detects road users", "ByteTrack: keeps IDs across frames", "OpenCV, Streamlit, Plotly, ReportLab"]),
                           ("NearMiss custom logic", ["Trajectory prediction and conflict gates", "Same-direction following check", "Multi-signal suspected-collision detector",
@@ -689,7 +717,7 @@ def slide7(c):
                 text(c, sub.upper(), x, y + 14, "Mono", 18, MUTED, spacing=2)
                 y += 44
             for item in items:
-                text(c, "•", x + 2, y + 6, "Sans", 26, WHITE)
+                text(c, "•", x + 2, y + 6, "Sans", 24, WHITE)
                 y = para(c, item, x + 24, y + 6, w - 24, "Sans", 24, WHITE, 1.3) + 6
     footer(c, 7)
 
@@ -712,8 +740,8 @@ def slide8(c):
     kicker(c, "AI assistance", 120, 560, AMBER, 18)
     para(c, "OpenAI Codex and Anthropic Claude (Opus) assisted with writing, reviewing and testing code, and with building this deck. Results shown come from running the app and its tests.",
          120, 592, half, "Sans", 22, MUTED, 1.45)
-    kicker(c, "Open source", 120 + half + 50, 560, AMBER, 18)
-    para(c, "Ultralytics YOLO · ByteTrack · OpenCV · Streamlit · Plotly · ReportLab · GSAP · Inter, Instrument Serif, JetBrains Mono (OFL)",
+    kicker(c, "Footage · open source", 120 + half + 50, 560, AMBER, 18)
+    para(c, "“Traffic Flow In The Highway”, Mike Bird / Pexels (Pexels License). Ultralytics YOLO · ByteTrack · OpenCV · Streamlit · Plotly · ReportLab · GSAP · Inter, Instrument Serif, JetBrains Mono (OFL)",
          120 + half + 50, 592, half, "Sans", 22, MUTED, 1.45)
     runs(c, [("A near miss disappears", "Sans-Semi", WHITE), ("in seconds.", "Serif-Italic", WHITE), ("Its evidence shouldn’t.", "Serif-Italic", CORAL)], 120, 790, 1700, 64)
     text(c, "NearMiss · Srivibhav Padakandla · Aadi Shukla", 120, 880, "Sans", 30, MUTED)
@@ -726,7 +754,8 @@ def main() -> int:
     c = Canvas(str(OUT), pagesize=(W / 2, H / 2))
     c.setTitle("NearMiss — 3-minute presentation (PDF backup)")
     c.setAuthor("Srivibhav Padakandla, Aadi Shukla")
-    c.setSubject("Synthetic demo. All app scenes are the labeled NearMiss synthetic demonstration.")
+    c.setSubject("Real footage (Mike Bird / Pexels, Traffic Flow In The Highway, Pexels License) with experimental NearMiss predictions. "
+                 "Ordinary unlabelled traffic: every warning and contact candidate is unverified; human review required.")
     for n, draw in enumerate((slide1, slide2, slide3, slide4, slide5, slide6, slide7, slide8), 1):
         page.update(n=n, oy=0, k=1.0)
         c.saveState()

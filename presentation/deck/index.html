@@ -7,8 +7,8 @@
   <link rel="stylesheet" href="deck.css" />
   <!-- Everything below is local. No CDN or network is used at playback. -->
   <script src="vendor/gsap.min.js"></script>
-  <script src="data/demo-metrics.js"></script>
-  <script src="data/brief.js"></script>
+  <script src="data/real-metrics.js"></script>
+  <script src="sync.js"></script>
 </head>
 <body>
   <div id="viewport">
@@ -21,7 +21,8 @@
         <p class="photo-label">Illustrative image · not analyzed footage</p>
         <div class="scene-panel" id="s1-panel" data-step="1">
           <div class="scene-host" id="s1-scene"></div>
-          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag">Scripted tracks · nearmiss/demo.py</span></div>
+          <div class="panel-tags"><span class="tag solid">Real footage</span><span class="tag">Actual YOLO11n + ByteTrack boxes · experimental flags</span></div>
+          <p class="clip-credit">Footage: Mike Bird / Pexels</p>
           <div class="freeze-note" id="s1-freeze"></div>
         </div>
         <div class="hook">
@@ -48,7 +49,7 @@
             <div><p class="kicker muted">Built by</p><p class="names"><em>Srivibhav Padakandla</em> · <em>Aadi Shukla</em></p></div>
             <div><p class="kicker muted">Who it is for</p><p class="who">People who review intersections: safety staff, and neighbors preparing a street-safety conversation.</p></div>
           </div>
-          <p class="synthetic-line" data-step="3"><span class="tag solid">Synthetic demo</span> Every app scene in this talk uses NearMiss’s labeled demo: generated footage, scripted tracks. No real place, no real crash.</p>
+          <p class="real-line" data-step="3"><span class="tag solid">Real footage</span> <span>Ordinary highway traffic (Mike Bird / Pexels), no incident labels. Boxes and flags are actual NearMiss output: experimental, unverified, human review required.</span></p>
         </div>
       </section>
 
@@ -60,17 +61,17 @@
         </div>
         <div class="earned-scene">
           <div class="scene-host" id="s3-scene"></div>
-          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag" id="s3-tag"></span></div>
+          <div class="panel-tags"><span class="tag solid">Real footage</span><span class="tag" id="s3-tag"></span></div>
         </div>
         <div class="earned-side">
           <div class="arrivals" data-step="2" id="s3-arrivals"></div>
           <div class="ruler" data-step="3" id="s3-ruler"></div>
-          <figure class="proof" data-step="4">
-            <div class="crop" style="--img:url(assets/captures/warning.png)"><img src="assets/captures/warning.png" alt="NearMiss 'Why each warning was raised' panel" /></div>
-            <figcaption>Actual app · Analysis → “Why each warning was raised”</figcaption>
+          <figure class="proof explain" data-step="4">
+            <div class="explain-card" id="s3-explain"></div>
+            <figcaption>Actual explain_event() output · the app’s “Why each warning was raised” text</figcaption>
           </figure>
         </div>
-        <p class="footnote">Image-space pixels and constant-velocity projection. Not a measured speed, distance or collision probability.</p>
+        <p class="footnote">Image pixels, constant-velocity projection: in perspective, two cars in one lane can “meet”. Not a measured speed, distance or probability.</p>
       </section>
 
       <!-- 4 · Inspect the source (Srivibhav, 25 s) -->
@@ -81,14 +82,14 @@
         </div>
         <div class="source-media">
           <div class="media-swap">
-            <video id="s4-video" src="assets/clips/demo-annotated.mp4" muted playsinline preload="auto"></video>
+            <video id="s4-video" src="assets/real/annotated.mp4" poster="assets/real/annotated-231.jpg" muted playsinline preload="auto"></video>
             <div class="investigation" data-step="2">
-              <img src="assets/captures/investigation.png" alt="NearMiss Investigation page at the first alert frame" />
+              <img src="assets/real/investigation.png" alt="NearMiss Investigation page on the real clip, original frame 34 with stored observations" />
               <div class="hl" id="s4-hl"></div>
             </div>
           </div>
           <div class="clip-timeline" id="s4-timeline"><div class="bar"><div class="fill" id="s4-fill"></div></div></div>
-          <p class="media-caption" id="s4-caption">Actual NearMiss annotated render of the synthetic demo · click a marker to jump</p>
+          <p class="media-caption" id="s4-caption">Actual NearMiss annotated render of the real clip · click a marker to jump</p>
         </div>
         <div class="source-side">
           <div id="s4-events"></div>
@@ -104,19 +105,15 @@
         </div>
         <div class="review-scene">
           <div class="scene-host" id="s5-scene"></div>
-          <div class="panel-tags"><span class="tag solid">Synthetic demo</span><span class="tag">Diagram · half speed</span></div>
+          <div class="panel-tags"><span class="tag solid">Real footage</span><span class="tag">Half speed · stored boxes</span></div>
           <div class="contact-tag" id="s5-contact"></div>
         </div>
         <div class="review-side">
           <ul class="signals" data-step="1" id="s5-signals"></ul>
-          <div class="decisions" data-step="2">
-            <div class="decision confirm"><b>Confirm</b><span>creates one local, simulated notice</span></div>
-            <div class="decision"><b>Dismiss</b><span>no notice</span></div>
-            <div class="decision"><b>Uncertain</b><span>no notice</span></div>
-          </div>
+          <div class="read" data-step="2" id="s5-read"></div>
           <figure class="proof tall" data-step="3">
-            <div class="crop incidents"><img src="assets/captures/incidents.png" alt="NearMiss Incidents page with review buttons" /></div>
-            <figcaption>Actual app · Incidents (review recorded on the synthetic demo)</figcaption>
+            <div class="crop incidents"><img src="assets/real/incidents.png" alt="NearMiss Incidents review controls: Confirm incident, Dismiss, Uncertain" /></div>
+            <figcaption>Actual app · Incidents review controls on this clip</figcaption>
           </figure>
         </div>
       </section>
@@ -125,22 +122,26 @@
       <section class="slide" data-id="followup" data-seconds="25" data-speaker="Aadi" data-steps="2">
         <div class="pad">
           <p class="kicker">From evidence to follow-up</p>
-          <h2 class="headline small">One local notice, a plan, and <em class="amber">a brief anyone can check.</em></h2>
+          <h2 class="headline small">No confirmation, no notice. <em class="amber">A plan anyone can check.</em></h2>
         </div>
         <div class="follow-grid">
-          <figure class="proof">
-            <div class="crop dispatch"><img src="assets/captures/dispatch.png" alt="NearMiss simulated dispatch inbox" /></div>
-            <figcaption>Actual app · Dispatch · local simulation, nothing sent</figcaption>
-          </figure>
+          <div class="gate-col">
+            <p class="mini-title">Dispatch · only after Confirm</p>
+            <div class="gate" id="s6-gate"></div>
+            <figure class="proof">
+              <div class="crop streetlab"><img src="assets/real/streetlab.png" alt="NearMiss Street Lab evidence summary on the real clip: 41 warnings, 7 HIGH, 5 suspected, 0 confirmed" /></div>
+              <figcaption>Actual app · Street Lab summary for this clip</figcaption>
+            </figure>
+          </div>
           <div class="crossing" data-step="1">
-            <p class="mini-title">Street Lab · crossing-time arithmetic</p>
+            <p class="mini-title">Street Lab · crossing arithmetic</p>
             <div id="s6-bars"></div>
             <p class="caveat" id="s6-caveat"></p>
           </div>
           <div class="brief" data-step="2">
-            <p class="mini-title">Actual export · evidence brief (.md)</p>
+            <p class="mini-title">Actual export · community brief</p>
             <div class="brief-page" id="s6-brief"></div>
-            <p class="caveat">Street Lab’s community brief and the Analysis PDF report are separate exports.</p>
+            <p class="caveat">Downloaded from Street Lab on this clip; no review decisions changed.</p>
           </div>
         </div>
       </section>
@@ -165,7 +166,7 @@
           </div>
           <div class="col" data-step="3">
             <h3 class="coral">Not yet proven</h3>
-            <ul><li>Accuracy on real-world footage has not been measured</li><li>Image pixels only: no calibrated metres, speeds or probabilities</li><li>No crash-reduction or safety-rating claim</li><li>Dispatch is simulated; nothing leaves the computer</li><li>One camera view, short clips</li></ul>
+            <ul id="s7-unproven"></ul>
           </div>
         </div>
       </section>
@@ -184,7 +185,7 @@
           </ol>
           <div class="credits" data-step="1">
             <p><b>AI assistance</b> OpenAI Codex and Anthropic Claude (Opus) assisted with writing, reviewing and testing code, and with building this deck. Results shown come from running the app and its tests.</p>
-            <p><b>Open source</b> Ultralytics YOLO · ByteTrack · OpenCV · Streamlit · Plotly · ReportLab · GSAP · Inter, Instrument Serif, JetBrains Mono (OFL)</p>
+            <p><b>Footage · open source</b> “Traffic Flow In The Highway”, Mike Bird / Pexels (Pexels License). Ultralytics YOLO · ByteTrack · OpenCV · Streamlit · Plotly · ReportLab · GSAP · Inter, Instrument Serif, JetBrains Mono (OFL)</p>
           </div>
           <div class="closing" data-step="2">
             <p class="close-1">A near miss disappears <em>in seconds.</em> <em class="coral">Its evidence shouldn’t.</em></p>

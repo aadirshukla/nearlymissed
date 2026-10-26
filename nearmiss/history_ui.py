@@ -41,7 +41,9 @@ def _duration(seconds: Any) -> str:
 
 
 def _run_label(snapshot: dict) -> str:
-    kind = "Synthetic" if snapshot.get("source_kind") == "synthetic_demo" else "Uploaded"
+    kind = {"synthetic_demo": "Synthetic", "real_traffic_demo": "Real sample"}.get(
+        snapshot.get("source_kind"), "Uploaded"
+    )
     return (
         f"{snapshot.get('source_name')} · {snapshot.get('camera_label')} · {kind} · "
         f"{_duration(snapshot.get('duration_seconds'))} · {snapshot.get('snapshot_id')}"
@@ -122,6 +124,8 @@ def _format_value(metric: str, value: Any) -> str:
 def _render_comparison(comparison: dict, key_prefix: str) -> None:
     if comparison["provenance_mismatch"]:
         st.error(comparison["caveats"][0])
+    elif comparison.get("source_difference"):
+        st.warning(comparison["caveats"][0])
     if comparison["comparison_kind"] == "identical_snapshot":
         st.info("Both selections are the same saved run.")
     rows = [
@@ -141,7 +145,9 @@ def _render_comparison(comparison: dict, key_prefix: str) -> None:
             )
     st.markdown("**Read before interpreting**")
     for caveat in comparison["caveats"]:
-        if comparison["provenance_mismatch"] and caveat == comparison["caveats"][0]:
+        if (comparison["provenance_mismatch"] or comparison.get("source_difference")) and (
+            caveat == comparison["caveats"][0]
+        ):
             continue
         st.markdown(f"- {caveat}")
     st.caption(comparison["ranking_note"])

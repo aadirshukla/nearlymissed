@@ -154,6 +154,8 @@ nearmiss/events.py         Event normalization and CSV export
 nearmiss/safety.py         Metrics, heatmap, timeline, review/export helpers
 nearmiss/report.py         Source-backed PDF safety report
 nearmiss/demo.py           Labeled synthetic demo footage + scripted track rows
+nearmiss/real_demo.py      Bundled real-traffic sample: manifest validation, cache restore
+static/real-demo/          Real stock footage, its actual YOLO + ByteTrack rows, manifest
 nearmiss/explain.py        Plain-language evidence explanations
 nearmiss/streetlab.py      Street Lab summary, crossing illustration, brief
 tests/                     Synthetic unit tests and application contracts
@@ -177,8 +179,9 @@ Nested evidence is preserved in CSV/JSON exports.
 ```
 
 Latest verified local result (2026-10-25, America/Los_Angeles):
-**237 passed**, including comparison regressions, Presenter Mode navigation,
-Streamlit AppTest walk-throughs, and the photo landing page. Browser checks at desktop
+**271 passed**, including comparison regressions, Presenter Mode navigation,
+Streamlit AppTest walk-throughs, the photo landing page, and the bundled
+real-traffic sample (integrity, offline cache restore, provenance, entry points). Browser checks at desktop
 1280 px and mobile 390 px were performed by the host session, not by the test
 suite. The earlier 2026-10-24 baseline was 35. A fresh end-to-end
 run of `01_Accident_001.mp4` at confidence 0.31 processed 224 frames into 504
@@ -208,15 +211,39 @@ audit trail.
 
 ## Demonstration
 
-### Guided synthetic demo (no footage or model needed)
-
 The Overview landing page is a full-bleed photograph (`static/nearmiss-hero.jpg`,
 labeled as illustrative context, not analyzed footage) with the headline "See
-the moments before impact.", a **Start guided demo** button, the MP4 uploader,
-and "How a warning is earned". Once footage or the demo is active, every page,
-including Overview, uses the dark interface so evidence tables stay legible.
+the moments before impact.", a primary **Start guided demo** button, a secondary
+**Controlled synthetic example** button, and the MP4 uploader. Below the hero
+come the real-traffic annotated preview, the labeled controlled schematic
+walkthrough, and "How a warning is earned". Once footage or a demo is active,
+every page, including Overview, uses the dark interface so evidence tables stay
+legible.
 
-Select **Start guided demo** on Overview. NearMiss generates a short, clearly
+### Guided demo: real traffic with precomputed actual tracking
+
+**Start guided demo** opens a short clip of real traffic from Pexels (credit,
+URL and license are in `static/real-demo/manifest.json` and shown wherever the
+sample appears) together with the YOLO + ByteTrack rows NearMiss produced for
+it locally at the default tracking settings. Nothing is downloaded and no model
+is loaded on click: `nearmiss/real_demo.py` checks every file against the
+manifest's SHA-256 digests, the metadata against the decoded video, and each
+track row against the frame, and then copies the files into the normal
+`.nearmiss_cache/<source sha256>/<analysis key>/` layout. Prediction, incident
+evidence, review and the simulated inbox run live on those rows. The sample's
+video ID is the true source SHA-256, its banner reads **REAL TRAFFIC SAMPLE**, and
+tracks, warnings, incidents, analysis JSON, report, briefs and Library entries
+carry `data_source = "real_traffic_demo"`. Results are unverified candidates from
+provisional heuristics, and no accuracy is claimed. At default thresholds this
+ordinary-traffic clip yields many warning candidates and several suspected
+contacts, which is useful evidence about false alarms. Changing model settings
+forces a normal re-analysis, and missing or altered bundle files show an error
+with no fallback. See `docs/real-traffic-demo.md`.
+
+### Controlled synthetic example (no footage or model needed)
+
+Select **Controlled synthetic example** on Overview (or **Present the controlled
+synthetic walkthrough** under the schematic story). NearMiss generates a short, clearly
 illustrative top-down intersection clip and deterministic scripted track rows
 locally (`nearmiss/demo.py`), caches them in the standard
 `.nearmiss_cache/<video id>/<analysis key>/` layout, and opens the results. Only
@@ -226,8 +253,10 @@ pipeline. Every frame is stamped **SYNTHETIC DEMO**, an amber source banner is
 shown on every page, and exports carry `data_source = "synthetic_demo"` (tracks,
 warnings and incidents CSV, analysis JSON `provenance`, safety-report PDF, and
 the community brief). **Reset demo reviews** clears decisions for the demo ID
-only; **Return to real footage** restores the previous upload. See
-`docs/challenge-demo-guide.md` for a 2–3 minute script.
+only; **Return to your footage** restores the previous upload (for either demo).
+Its known outcomes are what the regression tests pin. See
+`docs/challenge-demo-guide.md` for a 2–3 minute script written for this
+synthetic flow.
 
 ### Uploaded footage
 
@@ -238,7 +267,7 @@ only; **Return to real footage** restores the previous upload. See
 
 If either detector returns no event, the corresponding stage shows an honest
 empty state. Synthetic data appears in the dashboard only through the labeled
-guided demo.
+controlled synthetic example.
 
 ### Street Lab and tool pages
 

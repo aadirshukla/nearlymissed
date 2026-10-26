@@ -1,11 +1,13 @@
 # NearMiss — challenge demo guide
 
-A truthful 2–3 minute walkthrough of the guided synthetic demonstration, plus
+A truthful 2–3 minute walkthrough of the controlled synthetic demonstration, plus
 what is implemented versus simulated and how to reproduce it.
 
 The app has eight sections: Overview, Analysis, Investigation, Incidents,
 Explain & Share, Dispatch, Street Lab, Library. The guided steps cover the
 five core sections. The other three are optional detours, described below.
+
+**Choose the right entry:** **Start guided demo** now opens real traffic with actual locally precomputed YOLO/ByteTrack overlays. This scripted incident-review walkthrough uses **Controlled synthetic example**, the separately labeled secondary button. For the real-footage source and limitations, see [the real-traffic guide](real-traffic-demo.md).
 
 ## Before you start
 
@@ -31,7 +33,7 @@ footage. "NearMiss looks for close calls in traffic footage: moments when two ro
 projected paths and timing converge. Every warning stays tied to evidence a
 person can check. I'll use the guided demo. It is a generated intersection,
 labeled SYNTHETIC DEMO everywhere, so no real place or real crash is shown."
-Click **Start guided demo**, the amber button in the hero, above the uploader.
+Click **Controlled synthetic example**, the secondary button in the hero, above the uploader.
 
 **0:20 — Analysis (50 s).**
 Point at the amber source banner. "The footage and tracks are scripted. Only
@@ -91,7 +93,7 @@ synthetic label. Changes are worded by direction ("33.3% less time",
   under settings it was not computed with.
 
 **2:35 — Close (10 s).**
-Click **Return to real footage**. "The same workflow runs on an uploaded MP4
+Click **Return to your footage**. "The same workflow runs on an uploaded MP4
 with YOLO and ByteTrack."
 
 ## Implemented versus simulated

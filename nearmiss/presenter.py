@@ -526,7 +526,7 @@ def render_presenter(
         st.caption(crossing["hypothesis"])
 
     elif step_key == "brief":
-        source = describe_source(source_kind, video_id, tracks, (incidents or []) + (events or []))
+        source = describe_source(source_kind, video_id, tracks, (incidents or []) + (events or []), provenance)
         kind, record = (INCIDENT, incident) if incident is not None else (PREDICTION, event)
         if record is None:
             st.info("No flagged moment to brief with the current thresholds.")
@@ -534,6 +534,7 @@ def render_presenter(
             brief = build_evidence_brief(
                 source_name=source_name, video_id=video_id, source_kind=source_kind, metadata=metadata,
                 tracks=tracks, kind=kind, record=record, reviews=reviews, notifications=notifications,
+                provenance=provenance,
             )
             summary = streetlab.evidence_summary(
                 provenance=provenance, tracks=tracks, events=events, incidents=incidents,

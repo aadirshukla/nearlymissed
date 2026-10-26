@@ -240,6 +240,38 @@ def test_synthetic_vs_uploaded_comparison_has_mismatch_notice():
     assert all(row["delta"] in (0, None) for row in same["metrics"])
 
 
+def test_real_sample_vs_upload_is_a_source_difference_not_synthetic():
+    upload = snapshot(duration_seconds=900.0)
+    sample = snapshot(
+        video_sha256=OTHER_DIGEST, source_kind="real_traffic_demo",
+        tracks=fixture_tracks("real_traffic_demo"), tracking_origin="bundled_precomputed",
+    )
+    assert sample["provenance"]["warnings"] == []
+    assert "bundled rows, precomputed locally" in sample["provenance"]["detector"]
+    for baseline, candidate in ((upload, sample), (sample, upload)):
+        comparison = compare_analysis_snapshots(baseline=baseline, candidate=candidate)
+        assert comparison["provenance_mismatch"] is False
+        assert comparison["source_difference"] is True
+        first = comparison["caveats"][0]
+        assert first.startswith("SOURCE DIFFERENCE")
+        assert "uploaded footage" in first and "bundled real-traffic stock sample" in first
+        exported = comparison_to_csv(comparison) + comparison_to_json(comparison)
+        assert "synthetic" not in exported.lower() and "PROVENANCE MISMATCH" not in exported
+
+    # Synthetic versus the real sample is still a mismatch, naming the real source.
+    demo = snapshot(video_sha256=OTHER_DIGEST, source_kind="synthetic_demo", tracks=fixture_tracks("synthetic_demo"))
+    mixed = compare_analysis_snapshots(
+        baseline=snapshot(source_kind="real_traffic_demo", tracks=fixture_tracks("real_traffic_demo")),
+        candidate=demo,
+    )
+    assert mixed["provenance_mismatch"] is True and mixed["source_difference"] is False
+    assert mixed["caveats"][0].startswith("PROVENANCE MISMATCH")
+    assert "the bundled real-traffic stock sample" in mixed["caveats"][0]
+    # Same-kind runs carry neither notice.
+    plain = compare_analysis_snapshots(baseline=upload, candidate=snapshot(video_sha256=OTHER_DIGEST))
+    assert not plain["provenance_mismatch"] and not plain["source_difference"]
+
+
 def test_exports_round_trip(tmp_path):
     database = tmp_path / "nm.db"
     save_analysis_snapshot(snapshot=snapshot(), database_path=database)

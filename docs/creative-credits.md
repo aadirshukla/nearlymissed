@@ -98,3 +98,16 @@ generated footage and scripted tracks, with no real place, traffic or crash.
 The traffic diagrams replay the scripted positions from
 `presentation/data/demo-metrics.json` and carry a "Synthetic demo" tag. The
 dispatch shown is the app's local simulated inbox. Nothing was sent anywhere.
+
+## Additional real-traffic overlay preview
+
+`presentation/exports/NearMiss-real-traffic-demo.mp4` is a separate 15-second
+preview added after the 165-second challenge film. It uses Mike Bird’s
+[Traffic Flow In The Highway](https://www.pexels.com/video/traffic-flow-in-the-highway-2103099/)
+under the [Pexels License](https://www.pexels.com/license/). NearMiss processed
+the real clip locally with YOLO11 nano and ByteTrack, then drew its observed
+boxes, IDs, trails and provisional screening overlays. The source credit is
+baked into the preview. See `static/real-demo/README.md` and its hash-bound
+manifest for the actual inference settings and limitations. This preview is
+not synthetic traffic; the existing 165-second film and eight-slide deck still
+present the separately labeled controlled synthetic example.

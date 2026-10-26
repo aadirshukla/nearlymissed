@@ -30,6 +30,12 @@ SNAPSHOT_SCHEMA_VERSION = "1.0"
 SOURCE_KINDS = {
     "synthetic_demo": "Synthetic demonstration (generated footage and scripted tracks)",
     "uploaded_video": "Uploaded video (computer-vision estimates)",
+    "real_traffic_demo": "Real traffic sample (bundled licensed stock footage)",
+}
+# How the comparison caveat names each real (non-generated) source.
+REAL_SOURCE_NAMES = {
+    "uploaded_video": "uploaded footage",
+    "real_traffic_demo": "the bundled real-traffic stock sample",
 }
 # Clips shorter than this are described as too short for pattern statements.
 SHORT_EXPOSURE_SECONDS = 600.0
@@ -289,8 +295,13 @@ def build_analysis_snapshot(
     zone_pixels: Any = None,
     video_metadata: Any = None,
     notes: str = "",
+    tracking_origin: str | None = None,
 ) -> dict[str, Any]:
-    """Build an unsaved snapshot dict. No footage or per-frame records are kept."""
+    """Build an unsaved snapshot dict. No footage or per-frame records are kept.
+
+    ``tracking_origin`` (for the bundled real sample) records whether the rows
+    were the bundled precomputed output or a fresh local analysis.
+    """
 
     video_sha256 = str(video_sha256 or "").strip().lower()
     if not video_sha256:
@@ -315,9 +326,10 @@ def build_analysis_snapshot(
         }
     )
     warnings = []
-    if source_kind == "uploaded_video" and any("synthetic" in value.lower() for value in observed_sources):
+    if source_kind != "synthetic_demo" and any("synthetic" in value.lower() for value in observed_sources):
         warnings.append(
-            "Records carry a synthetic data_source tag although the run is labeled as uploaded video."
+            "Records carry a synthetic data_source tag although the run is labeled as "
+            + ("uploaded video." if source_kind == "uploaded_video" else "real footage.")
         )
     if source_kind == "synthetic_demo" and not observed_sources:
         warnings.append("Synthetic run saved without per-record data_source tags.")
@@ -330,7 +342,12 @@ def build_analysis_snapshot(
             "Scripted synthetic tracks (no YOLO inference)"
             if source_kind == "synthetic_demo"
             else f"YOLO ({config['tracking_config'].get('model_name', 'unknown model')}) + ByteTrack"
+            + {
+                "bundled_precomputed": " (bundled rows, precomputed locally)",
+                "local_inference": " (fresh local inference with these settings)",
+            }.get(tracking_origin or "", "")
         ),
+        "tracking_origin": tracking_origin,
         "footage_stored": False,
         "warnings": warnings,
     }
@@ -536,7 +553,10 @@ def compare_analysis_snapshots(
     same_footage = baseline.get("video_sha256") == candidate.get("video_sha256")
     setting_changes = diff_snapshot_settings(baseline=baseline, candidate=candidate)
     kinds = {baseline.get("source_kind"), candidate.get("source_kind")}
-    provenance_mismatch = len(kinds) > 1
+    # Only a generated-versus-real pairing is a provenance mismatch. Two real
+    # sources (bundled stock sample and an operator upload) just differ.
+    provenance_mismatch = len(kinds) > 1 and "synthetic_demo" in kinds
+    source_difference = len(kinds) > 1 and not provenance_mismatch
     if baseline.get("snapshot_id") == candidate.get("snapshot_id"):
         comparison_kind = "identical_snapshot"
     elif same_footage:
@@ -552,11 +572,23 @@ def compare_analysis_snapshots(
 
     caveats = list(BASE_CAVEATS)
     if provenance_mismatch:
+        other = next(iter(kinds - {"synthetic_demo"}))
         caveats.insert(
             0,
             "PROVENANCE MISMATCH: one run is a synthetic demonstration and the other is "
-            "uploaded footage. Synthetic counts are scripted and must not be compared "
+            + REAL_SOURCE_NAMES.get(other, "footage of unknown provenance")
+            + ". Synthetic counts are scripted and must not be compared "
             "with real-footage results as evidence.",
+        )
+    elif source_difference:
+        names = " and the other is ".join(
+            REAL_SOURCE_NAMES.get(kind, f"an unrecognized source ({kind})")
+            for kind in (baseline.get("source_kind"), candidate.get("source_kind"))
+        )
+        caveats.insert(
+            0,
+            f"SOURCE DIFFERENCE: one run is {names}. Both are real footage, but they come from "
+            "different cameras and contexts, so their counts are not comparable as evidence.",
         )
     if comparison_kind == "same_footage_different_settings":
         caveats.append(
@@ -596,6 +628,7 @@ def compare_analysis_snapshots(
         "comparison_kind": comparison_kind,
         "same_footage": same_footage,
         "provenance_mismatch": provenance_mismatch,
+        "source_difference": source_difference,
         "source_kinds": {"baseline": baseline.get("source_kind"), "candidate": candidate.get("source_kind")},
         "metrics": rows,
         "setting_changes": setting_changes,

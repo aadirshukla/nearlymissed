@@ -58,7 +58,8 @@ def test_guided_demo_end_to_end(isolated):
     assert not at.exception, at.exception
     assert any(item.key == "start_demo" for item in at.button)
 
-    at.button(key="start_demo").click().run()
+    # The controlled synthetic example has its own labeled entry point.
+    at.button(key="start_synthetic_demo").click().run()
     assert not at.exception, at.exception
     assert at.session_state["navigation"] == "Analysis"
     assert demo.is_demo_video_id(at.session_state["active_video"]["video_hash"])
@@ -114,6 +115,7 @@ def test_pages_without_footage_offer_the_demo(isolated):
     at.run()
     go(at, "Street Lab")
     assert any(item.key == "gate_demo" for item in at.button)
+    assert any(item.key == "gate_synthetic_demo" for item in at.button)
 
 
 def test_uploaded_footage_path_is_unchanged_and_not_labeled_synthetic(isolated):
@@ -159,7 +161,7 @@ def test_uploaded_footage_path_is_unchanged_and_not_labeled_synthetic(isolated):
 def test_integrated_tool_pages_render_for_the_demo(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     for page in ("Investigation", "Explain & Share", "Library", "Overview"):
         go(at, page)
         assert "SYNTHETIC DEMO" in text_of(at) or page == "Library"
@@ -174,7 +176,7 @@ def test_integrated_tool_pages_render_for_the_demo(isolated):
 def test_safety_report_download_is_withheld_after_threshold_change(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     at.button(key=f"report_{demo.DEMO_VIDEO_ID}").click().run()
     assert not at.exception, at.exception
     labels = [element.proto.label for element in at.get("download_button")]
@@ -194,7 +196,7 @@ def save_buttons(at: AppTest) -> list:
 def test_library_never_offers_a_snapshot_built_with_older_settings(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     built = at.session_state["history_current_snapshot"]
     assert built["config"]["conflict_config"]["high_time_gap_seconds"] == pytest.approx(0.50)
 
@@ -223,7 +225,7 @@ def test_library_never_offers_a_snapshot_built_with_older_settings(isolated):
 def test_jump_to_evidence_selects_its_participants_over_unrelated_tracks(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     go(at, "Investigation")
     prefix = f"investigation_{demo.DEMO_VIDEO_ID}"
     tracks = at.multiselect(key=f"{prefix}_tracks")
@@ -270,9 +272,10 @@ def test_photo_landing_keeps_demo_upload_and_explainer_then_drops_photo(isolated
     assert "illustrative context only" in html
     assert "How a warning is earned" in html
     assert at.button(key="start_demo").proto.type == "primary"
+    assert at.button(key="start_synthetic_demo").proto.type != "primary"
     assert len(at.get("file_uploader")) == 1
 
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     go(at, "Overview")
     # With footage active the evidence tables stay on the dark interface.
     assert "background-attachment:fixed" not in page_html(at)

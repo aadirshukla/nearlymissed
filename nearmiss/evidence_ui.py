@@ -54,10 +54,11 @@ def render_evidence_page(
     incidents: list[dict],
     reviews: Any,
     notifications: list[dict],
+    provenance: dict | None = None,
 ) -> None:
     """Render the Explain & Share page for one analysed source."""
 
-    source = describe_source(source_kind, video_id, tracks, (incidents or []) + (events or []))
+    source = describe_source(source_kind, video_id, tracks, (incidents or []) + (events or []), provenance)
     if source["is_synthetic"]:
         st.warning(source["statement"], icon="🧪")
     if source.get("note"):
@@ -155,6 +156,7 @@ def render_evidence_page(
         record=record,
         reviews=reviews,
         notifications=notifications,
+        provenance=provenance,
     )
     st.download_button(
         "Download evidence brief",

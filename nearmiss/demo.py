@@ -177,8 +177,20 @@ def is_demo_video_id(video_id: str | None) -> bool:
     return str(video_id or "").startswith(DEMO_ID_PREFIX)
 
 
-def provenance_for(video_id: str | None) -> dict[str, Any]:
-    return dict(DEMO_PROVENANCE if is_demo_video_id(video_id) else UPLOAD_PROVENANCE)
+def provenance_for(
+    video_id: str | None, tracking_config: TrackingConfig | None = None, tracks_path: Path | None = None
+) -> dict[str, Any]:
+    """Source provenance. For the real sample, ``tracking_config`` and ``tracks_path``
+    describe the rows actually in use (see ``real_demo.real_provenance``)."""
+
+    if is_demo_video_id(video_id):
+        return dict(DEMO_PROVENANCE)
+    # Imported here: nearmiss.real_demo depends on the same video/store modules.
+    from nearmiss import real_demo
+
+    if real_demo.is_real_demo_video_id(video_id):
+        return real_demo.real_provenance(tracking_config=tracking_config, tracks_path=tracks_path)
+    return dict(UPLOAD_PROVENANCE)
 
 
 def _speed(actor: Actor, timestamp: float) -> float:

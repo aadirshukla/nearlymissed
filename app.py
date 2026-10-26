@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw
 
 from conflict_detector import detect_conflicts, diagnose_conflicts
 import nearmiss.store as store_module
-from nearmiss import motion, presenter, streetlab
+from nearmiss import motion, presenter, real_demo, streetlab
 from nearmiss.config import DEFAULT_CONFLICT_CONFIG, TrackingConfig
 from nearmiss.demo import (
     DEMO_CAMERA_ID,
@@ -30,6 +30,14 @@ from nearmiss.demo import (
     is_demo_video_id,
     provenance_for,
     reset_demo_reviews,
+)
+from nearmiss.real_demo import (
+    REAL_DEMO_CAMERA_ID,
+    RealDemoError,
+    ensure_real_demo_assets,
+    is_real_demo_video_id,
+    real_demo_active_video,
+    reset_real_demo_reviews,
 )
 from nearmiss.events import events_to_csv, format_timestamp, normalize_events
 from nearmiss.evidence_ui import render_evidence_page
@@ -114,6 +122,14 @@ DEMO_STEP_HINTS = {
     "Dispatch": "A confirmed incident creates one local, simulated notification. Acknowledge it. Nothing leaves this computer.",
     "Street Lab": "Turn the reviewed patterns into a community review brief with clearly stated assumptions.",
 }
+# The real sample's counts are whatever tracking returned, so hints never promise a result.
+REAL_DEMO_STEP_HINTS = {
+    **DEMO_STEP_HINTS,
+    "Analysis": "Play the annotated clip of real traffic. Every warning below was computed from actual "
+    "tracking rows at the current thresholds. None is verified; on ordinary traffic many may be false alarms.",
+    "Incidents": "Suspected incidents here are unverified candidates. Replay each one and choose Confirm, "
+    "Dismiss, or Uncertain. When nothing qualifies, nothing is fabricated for review.",
+}
 
 
 st.set_page_config(
@@ -192,6 +208,11 @@ def apply_styles() -> None:
         .nm-source-tag {{ font-weight:700; letter-spacing:.1em; font-size:.7rem; color:#A8A29E; }}
         .nm-source.synthetic .nm-source-tag {{ color:#0B0B0C; background:var(--nm-signal);
           padding:.12rem .42rem; border-radius:3px; }}
+        .nm-source.real {{ border-left-color:var(--nm-success); }}
+        .nm-source.real .nm-source-tag {{ color:#8ED0B6; }}
+        .nm-source.real a {{ color:#8ED0B6; text-decoration:underline; text-underline-offset:2px; }}
+        .nm-real-kicker {{ color:var(--nm-success); font-size:.7rem; font-weight:650; letter-spacing:.12em;
+          text-transform:uppercase; margin:0 0 .5rem; }}
         .nm-steps {{ display:flex; flex-wrap:wrap; gap:.3rem 1.4rem; list-style:none; margin:0 0 .5rem;
           padding:.75rem 0; border-top:1px solid var(--nm-border); border-bottom:1px solid var(--nm-border); }}
         .nm-steps li {{ color:#6B6661; font-size:.76rem; }}
@@ -433,7 +454,52 @@ def empty_state(title: str, message: str) -> None:
     )
 
 
+def _link(url: str, text: str) -> str:
+    """An escaped HTML link for https URLs; plain text otherwise."""
+
+    if not str(url).startswith("https://"):
+        return escape(text)
+    return f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener">{escape(text)}</a>'
+
+
+REAL_TRACKING_PHRASES = {
+    real_demo.BUNDLED_PRECOMPUTED: "actual YOLO + ByteTrack tracking, precomputed locally",
+    real_demo.LOCAL_INFERENCE: "fresh local YOLO + ByteTrack analysis with your selected settings",
+    real_demo.NOT_ANALYZED: "not yet analyzed with your selected settings",
+}
+
+
+def real_sample_banner(provenance: dict) -> None:
+    """Compact credit and uncertainty line; full provenance sits in a collapsed expander."""
+
+    tracking = REAL_TRACKING_PHRASES[provenance["tracking_origin"]]
+    st.markdown(
+        '<div class="nm-source real" role="note" aria-label="Data source">'
+        f'<span class="nm-source-tag">{escape(provenance["label"].upper())}</span>'
+        f'<span>\u201c{escape(provenance["title"])}\u201d by {escape(provenance["credit"])} on '
+        f'{_link(provenance["source_url"], "Pexels")} · {escape(tracking)}. '
+        "Warnings and suspected contacts are unverified candidates for human review; "
+        "false alarms are possible.</span></div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("Source and technical details", expanded=False):
+        config = provenance.get("tracking_config") or {}
+        st.markdown(
+            f"- Footage: [{provenance['title']}]({provenance['source_url']}) by {provenance['credit']}, "
+            f"used under the [{provenance['license']}]({provenance['license_url']}). Bundled sample, "
+            "not your upload.\n"
+            f"- Tracking settings: {config.get('model_name', '?')} at confidence "
+            f"{config.get('confidence', '?')}, overlap {config.get('iou_threshold', '?')}, device "
+            f"{config.get('device', '?')}, with ByteTrack IDs ({tracking}).\n"
+            f"- {provenance['pipeline_boundary']}\n"
+            f"- Video ID (source SHA-256): `{provenance['video_id']}`"
+        )
+
+
 def source_banner(provenance: dict, source_name: str) -> None:
+    if provenance.get("data_source") == real_demo.REAL_DEMO_DATA_SOURCE:
+        real_sample_banner(provenance)
+        return
     synthetic = provenance.get("data_source") == "synthetic_demo"
     st.markdown(
         f'<div class="nm-source{" synthetic" if synthetic else ""}" role="note" aria-label="Data source">'
@@ -445,7 +511,7 @@ def source_banner(provenance: dict, source_name: str) -> None:
     )
 
 
-def demo_steps(current: str) -> None:
+def demo_steps(current: str, hints: dict[str, str] = DEMO_STEP_HINTS) -> None:
     names = [name for name, _ in DEMO_STEPS]
     position = names.index(current) if current in names else -1
     items = []
@@ -457,7 +523,7 @@ def demo_steps(current: str) -> None:
         '<ol class="nm-steps" aria-label="Guided demo steps">' + "".join(items) + "</ol>",
         unsafe_allow_html=True,
     )
-    hint = DEMO_STEP_HINTS.get(current)
+    hint = hints.get(current)
     if hint:
         st.markdown(f'<p class="nm-hint">{escape(hint)}</p>', unsafe_allow_html=True)
     if 0 <= position < len(DEMO_STEPS) - 1:
@@ -650,29 +716,48 @@ def open_investigation(video_hash: str, frame_index: int, track_ids: list[int] |
     st.session_state["_next_page"] = "Investigation"
 
 
+def _remember_upload() -> None:
+    current = st.session_state.get("active_video")
+    if current and not is_demo_video_id(current.get("video_hash")) and not is_real_demo_video_id(
+        current.get("video_hash")
+    ):
+        st.session_state["previous_real_video"] = current
+
+
 def start_demo() -> None:
+    """Open the bundled real-traffic sample with its precomputed actual tracking."""
+
+    _remember_upload()
+    try:
+        sample = real_demo_active_video()
+    except (VideoError, OSError) as exc:
+        st.session_state["_demo_error"] = str(exc)
+        return
+    st.session_state["active_video"] = sample
+    st.session_state["_next_page"] = "Analysis"
+
+
+def start_synthetic_demo() -> None:
     """Generate (or reuse) the labeled synthetic demo and open its results."""
 
-    current = st.session_state.get("active_video")
-    if current and not is_demo_video_id(current.get("video_hash")):
-        st.session_state["previous_real_video"] = current
+    _remember_upload()
     try:
         demo_video = demo_active_video()
     except VideoError as exc:
-        st.session_state["_demo_error"] = str(exc)
+        st.session_state["_demo_error"] = f"The synthetic example could not be generated: {exc}"
         return
     st.session_state["active_video"] = demo_video
     st.session_state.setdefault(f"camera_id_{demo_video['video_hash']}", DEMO_CAMERA_ID)
     st.session_state["_next_page"] = "Analysis"
 
 
-def open_presenter() -> None:
-    """Enter Presenter mode on the active footage, or on the guided demo."""
+def open_presenter(start=start_demo) -> None:
+    """Enter Presenter mode on the active footage, or on a guided demo."""
 
     current = st.session_state.get("active_video")
     return_page = st.session_state.get("navigation", "Overview")
     if not current or not Path(current["source_path"]).exists():
-        start_demo()
+        start()
         if "_demo_error" in st.session_state:
             return
         return_page = st.session_state.get("_next_page", "Analysis")
@@ -692,22 +777,24 @@ def leave_demo() -> None:
 
 
 def reset_demo(video_hash: str) -> None:
-    reviews, notifications = reset_demo_reviews(video_hash)
+    reset = reset_demo_reviews if is_demo_video_id(video_hash) else reset_real_demo_reviews
+    reviews, notifications = reset(video_hash)
     st.session_state["_toast"] = (
         f"Demo reset · cleared {reviews} review(s) and {notifications} simulated notification(s)"
     )
 
 
 def demo_controls(video_hash: str, key: str) -> None:
+    sample = "real-traffic sample" if is_real_demo_video_id(video_hash) else "synthetic demo"
     cols = st.columns([1, 1, 2])
-    cols[0].button("Return to real footage", key=f"leave_demo_{key}", on_click=leave_demo, width="stretch")
+    cols[0].button("Return to your footage", key=f"leave_demo_{key}", on_click=leave_demo, width="stretch")
     cols[1].button(
         "Reset demo reviews",
         key=f"reset_demo_{key}",
         on_click=reset_demo,
         args=(video_hash,),
         width="stretch",
-        help="Clears decisions and simulated notifications for the synthetic demo only. "
+        help=f"Clears decisions and simulated notifications for the {sample} only. "
         "Reviews of uploaded footage are never touched.",
     )
 
@@ -735,9 +822,24 @@ presenting = presenter.is_active(st.session_state)
 
 active_video = st.session_state.get("active_video")
 active_is_demo = bool(active_video) and is_demo_video_id(active_video.get("video_hash"))
+active_is_real_demo = bool(active_video) and is_real_demo_video_id(active_video.get("video_hash"))
 if active_is_demo and not Path(active_video["source_path"]).exists():
     # The processed-video cache was cleared; regenerate the deterministic demo.
     active_video = st.session_state["active_video"] = demo_active_video()
+if active_is_real_demo:
+    # Restore the sample from its bundle if the cache was cleared; a bundle that
+    # no longer validates closes the sample with a visible error.
+    try:
+        if Path(active_video["source_path"]).exists():
+            real_demo.load_bundle()
+        else:
+            active_video = st.session_state["active_video"] = real_demo_active_video()
+    except (VideoError, OSError) as exc:
+        st.session_state["_demo_error"] = str(exc)
+        st.session_state.pop("active_video", None)
+        active_video, active_is_real_demo = None, False
+if "_demo_error" in st.session_state:
+    st.error(st.session_state.pop("_demo_error"))
 if st.session_state["navigation"] == "Overview" and not presenting and not (
     active_video and Path(active_video["source_path"]).exists()
 ):
@@ -770,7 +872,7 @@ with st.sidebar:
         st.button(
             "Presenter mode", key="presenter_open_sidebar", on_click=open_presenter, width="stretch",
             help="Five keyboard-driven steps: warning, source frame, incident review, Street Lab "
-            "and exported brief. Uses the guided demo when no footage is open. Read-only.",
+            "and exported brief. Uses the real-traffic sample when no footage is open. Read-only.",
         )
 
     with st.expander("Advanced settings", expanded=False):
@@ -778,6 +880,11 @@ with st.sidebar:
             st.caption(
                 "Synthetic demo: tracks are scripted, so model settings do not apply. "
                 "Prediction and incident thresholds below still do."
+            )
+        elif active_is_real_demo:
+            st.caption(
+                "Real-traffic sample: its bundled tracking rows were made with the default model "
+                "settings. Other model settings need a new local analysis, like any upload."
             )
         model_label = st.selectbox("Detection model", ["YOLO11 nano", "YOLOv8 nano"])
         model_name = "yolo11n.pt" if model_label == "YOLO11 nano" else "yolov8n.pt"
@@ -872,6 +979,32 @@ collision_config = {
 }
 
 
+def render_real_preview() -> None:
+    """Overview: the bundled real footage with overlays from its actual tracking rows."""
+
+    st.markdown('<div class="nm-real-kicker">Real footage · actual tracking output</div>', unsafe_allow_html=True)
+    section_header(
+        "Real traffic, through the NearMiss pipeline",
+        "Openly licensed stock footage of real cars. Boxes, trails and any warnings are drawn from the "
+        "YOLO + ByteTrack rows NearMiss produced for this clip locally.",
+    )
+    try:
+        preview = real_demo.annotated_preview_path()
+        credit = real_demo.load_bundle().credit
+    except RealDemoError as exc:
+        st.warning(str(exc))
+        return
+    st.video(str(preview), loop=True, muted=True)
+    st.caption(
+        f"Footage: \u201c{credit['title']}\u201d by {credit['credit']} on [Pexels]({credit['source_url']}), "
+        f"[{credit['license']}]({credit['license_url']}). "
+        "Bundled locally, not your upload. Overlays rendered at the default settings; heuristics are "
+        "provisional, warnings are not verified collisions, and detector accuracy on this footage "
+        "has not been measured."
+    )
+    st.button("Open this footage in the guided demo", on_click=start_demo, key="start_demo_preview")
+
+
 def render_pipeline_explainer() -> None:
     section_header(
         "How a warning is earned",
@@ -904,9 +1037,6 @@ def render_pipeline_explainer() -> None:
 
 
 if navigation == "Overview" and not presenting:
-    if "_demo_error" in st.session_state:
-        st.error(f"The synthetic demo could not be generated: {st.session_state.pop('_demo_error')}")
-
     if active_is_demo:
         page_header(
             "Guided demo",
@@ -937,11 +1067,16 @@ if navigation == "Overview" and not presenting:
             )
             st.button("Start guided demo", type="primary", on_click=start_demo, key="start_demo")
             st.markdown(
-                '<p class="nm-hero-demo-note">About 2 minutes. Uses a generated, clearly labeled '
-                "intersection: no upload, network, or model download needed.</p>"
-                '<div class="nm-hero-or">Or analyze your own footage</div>',
+                '<p class="nm-hero-demo-note">About 2 minutes. Real traffic footage with YOLO + ByteTrack '
+                "rows precomputed locally: no upload, network, or model download needed.</p>",
                 unsafe_allow_html=True,
             )
+            st.button(
+                "Controlled synthetic example", on_click=start_synthetic_demo, key="start_synthetic_demo",
+                help="A generated, scripted intersection with known outcomes, used for regression checks. "
+                "Not real footage.",
+            )
+            st.markdown('<div class="nm-hero-or">Or analyze your own footage</div>', unsafe_allow_html=True)
             uploaded = st.file_uploader(
                 "Traffic camera video",
                 type=["mp4"],
@@ -956,12 +1091,24 @@ if navigation == "Overview" and not presenting:
                 unsafe_allow_html=True,
             )
     else:
-        page_header(
-            "Overview",
-            "Turn traffic footage into reviewable evidence.",
-            "NearMiss follows vehicle movement, surfaces possible conflicts, and keeps every operator "
-            "decision connected to the original video.",
-        )
+        if active_is_real_demo:
+            page_header(
+                "Guided demo",
+                "Real traffic, analyzed by the real pipeline.",
+                "Bundled stock footage of real traffic. Its bundled YOLO + ByteTrack rows were "
+                "precomputed locally at the default settings, so it opens instantly; other model "
+                "settings run a normal local analysis. Prediction, incident evidence, review and "
+                "the simulated inbox run live.",
+            )
+            source_banner(real_demo.runtime_provenance(tracking_config), active_video["name"])
+            demo_steps("Overview", REAL_DEMO_STEP_HINTS)
+        else:
+            page_header(
+                "Overview",
+                "Turn traffic footage into reviewable evidence.",
+                "NearMiss follows vehicle movement, surfaces possible conflicts, and keeps every operator "
+                "decision connected to the original video.",
+            )
         uploaded = st.file_uploader(
             "Traffic camera video",
             type=["mp4"],
@@ -982,12 +1129,20 @@ if navigation == "Overview" and not presenting:
 
     if not active_video or not Path(active_video["source_path"]).exists():
         with st.container(key="overview_explainer"):
+            render_real_preview()
+            section_header(
+                "Controlled schematic example",
+                "The walkthrough below is a generated, scripted intersection drawn as a diagram. It is "
+                "not the real footage above; its known outcomes let automated tests check the pipeline.",
+            )
             story = motion.demo_story(conflict_config, collision_config)
             if story is not None:
                 motion.render_story(story)
                 st.button(
-                    "Present this walkthrough", key="presenter_open_story", on_click=open_presenter,
-                    help="Opens Presenter mode on the guided demo. Use ← and → to move between steps.",
+                    "Present the controlled synthetic walkthrough", key="presenter_open_story",
+                    on_click=open_presenter, args=(start_synthetic_demo,),
+                    help="Opens Presenter mode on the controlled synthetic example. "
+                    "Use ← and → to move between steps.",
                 )
             render_pipeline_explainer()
         st.stop()
@@ -1023,7 +1178,7 @@ if navigation == "Overview" and not presenting:
         )
         camera_id = st.text_input(
             "Camera name",
-            value=f"CAM-{video_hash[:8].upper()}",
+            value=REAL_DEMO_CAMERA_ID if active_is_real_demo else f"CAM-{video_hash[:8].upper()}",
             key=f"camera_id_{video_hash}",
             help="Used in the simulated dispatch inbox. No street address is inferred.",
         )
@@ -1053,7 +1208,10 @@ if navigation == "Overview" and not presenting:
         st.session_state["_next_page"] = "Analysis"
         st.toast("Analysis complete")
         st.rerun()
-    st.button("Try the guided demo instead", on_click=start_demo, key="start_demo_secondary")
+    if active_is_real_demo:
+        demo_controls(video_hash, "overview")
+    else:
+        st.button("Try the guided demo instead", on_click=start_demo, key="start_demo_secondary")
     render_pipeline_explainer()
     st.stop()
 
@@ -1106,18 +1264,21 @@ if not active_video or not Path(active_video["source_path"]).exists():
         presenter.render_unavailable("The footage for Presenter mode is no longer available.")
         st.stop()
     page_header(navigation, "No footage selected", "Choose a source video, or start the guided demo.")
-    empty_state("Footage required", "Upload an MP4 on Overview, or open the labeled synthetic demo.")
-    cols = st.columns([1, 1, 3])
+    empty_state(
+        "Footage required",
+        "Upload an MP4 on Overview, open the real-traffic sample, or open the controlled synthetic example.",
+    )
+    cols = st.columns([1, 1.3, 1, 1.7])
     cols[0].button("Start guided demo", type="primary", on_click=start_demo, key="gate_demo")
-    cols[1].button("Open Overview", on_click=queue_page, args=("Overview",))
+    cols[1].button("Controlled synthetic example", on_click=start_synthetic_demo, key="gate_synthetic_demo")
+    cols[2].button("Open Overview", on_click=queue_page, args=("Overview",))
     st.stop()
 
 source_path = Path(active_video["source_path"])
 video_hash = str(active_video["video_hash"])
 source_filename = str(active_video["name"])
-provenance = provenance_for(video_hash)
-source_kind = provenance["data_source"]
-export_prefix = "synthetic_demo_" if active_is_demo else ""
+export_prefix = "synthetic_demo_" if active_is_demo else "real_traffic_sample_" if active_is_real_demo else ""
+step_hints = REAL_DEMO_STEP_HINTS if active_is_real_demo else DEMO_STEP_HINTS
 try:
     initial_metadata, first_frame = inspect_video(source_path)
 except VideoError as exc:
@@ -1125,12 +1286,23 @@ except VideoError as exc:
     st.stop()
 
 camera_id = st.session_state.get(
-    f"camera_id_{video_hash}", DEMO_CAMERA_ID if active_is_demo else f"CAM-{video_hash[:8].upper()}"
+    f"camera_id_{video_hash}",
+    DEMO_CAMERA_ID if active_is_demo
+    else REAL_DEMO_CAMERA_ID if active_is_real_demo
+    else f"CAM-{video_hash[:8].upper()}",
 )
 applied_zone = st.session_state.get(f"zone_applied_{video_hash}", [])
 if active_is_demo:
     # Scripted rows replace model inference; regenerate if the cache was cleared.
     ensure_demo_assets()
+elif active_is_real_demo:
+    # Restore the bundled actual-tracking rows at the manifest config's cache path.
+    # Other model settings fall through to the normal cache miss below.
+    try:
+        ensure_real_demo_assets()
+    except (VideoError, OSError) as exc:
+        st.error(str(exc))
+        st.stop()
 artifacts = cached_analysis(
     video_hash,
     source_path,
@@ -1155,11 +1327,18 @@ if artifacts is None:
     st.button("Return to Overview", type="primary", on_click=queue_page, args=("Overview",))
     st.stop()
 
+# One runtime provenance object for every surface below: for the real sample it
+# reflects the settings and rows actually loaded (bundled or freshly inferred).
+provenance = provenance_for(video_hash, tracking_config, artifacts.tracks_path)
+source_kind = provenance["data_source"]
 try:
     tracks, metadata = load_artifacts(artifacts)
 except (OSError, ValueError, TypeError) as exc:
     st.error(f"Processed results could not be loaded: {exc}")
     st.stop()
+if active_is_real_demo:
+    # Tag in memory so exports name the source; the bundled rows stay byte-identical.
+    tracks = [{**row, "data_source": real_demo.REAL_DEMO_DATA_SOURCE} for row in tracks]
 
 analysis_zone = (
     applied_zone
@@ -1218,6 +1397,7 @@ if threshold_box is None:
             collision_config=collision_config,
             zone_pixels=applied_zone,
             video_metadata=asdict(metadata),
+            tracking_origin=provenance.get("tracking_origin"),
         )
         st.session_state["history_current_fingerprint"] = analysis_settings_fingerprint(
             video_hash,
@@ -1277,8 +1457,8 @@ elif navigation == "Analysis":
         "Follow tracked movement and inspect the moments NearMiss marked for attention.",
     )
     source_banner(provenance, source_filename)
-    if active_is_demo:
-        demo_steps("Analysis")
+    if active_is_demo or active_is_real_demo:
+        demo_steps("Analysis", step_hints)
     section_header("Footage", "Choose which annotations stay visible during playback.")
     control_cols = st.columns([.8, 1.15, .9, 4])
     show_boxes = control_cols[0].toggle("Boxes", value=True)
@@ -1308,7 +1488,14 @@ elif navigation == "Analysis":
 
     section_header("Summary")
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Vehicles", statistics["vehicles_tracked"])
+    if active_is_real_demo:
+        metric_cols[0].metric(
+            "Vehicle track IDs", statistics["vehicles_tracked"],
+            help="Distinct tracker IDs on vehicles, not a count of physical vehicles: occlusion and ID "
+            "switches can split one vehicle into several IDs.",
+        )
+    else:
+        metric_cols[0].metric("Vehicles", statistics["vehicles_tracked"])
     metric_cols[1].metric("Potential conflicts", statistics["total_conflicts"])
     metric_cols[2].metric("Suspected incidents", len(incidents))
     metric_cols[3].metric("Footage analyzed", format_timestamp(metadata.duration_seconds))
@@ -1528,7 +1715,7 @@ elif navigation == "Analysis":
             f"{export_prefix}nearmiss_annotated.mp4",
             "video/mp4",
         )
-    if active_is_demo:
+    if active_is_demo or active_is_real_demo:
         demo_controls(video_hash, "analysis")
 
 
@@ -1567,6 +1754,7 @@ elif navigation == "Explain & Share":
         incidents=incidents,
         reviews=persisted_reviews,
         notifications=dispatch_notifications,
+        provenance=provenance,
     )
 
 
@@ -1577,8 +1765,8 @@ elif navigation == "Incidents":
         "Open a suspected incident, replay the moment, and record an operator decision.",
     )
     source_banner(provenance, source_filename)
-    if active_is_demo:
-        demo_steps("Incidents")
+    if active_is_demo or active_is_real_demo:
+        demo_steps("Incidents", step_hints)
     review_counts = {
         "Uncertain": sum(incident.get("review_status") == "Uncertain" for incident in incidents),
         "Confirmed": sum(incident.get("review_status") == "Confirmed Incident" for incident in incidents),
@@ -1712,7 +1900,7 @@ elif navigation == "Incidents":
                 for event in events
             ]
             st.dataframe(pd.DataFrame(prediction_rows), width="stretch", hide_index=True)
-    if active_is_demo:
+    if active_is_demo or active_is_real_demo:
         demo_controls(video_hash, "incidents")
 
 
@@ -1723,8 +1911,8 @@ elif navigation == "Dispatch":
         "Confirmed incidents appear here for acknowledgment. This is a local simulation; nothing is sent externally.",
     )
     source_banner(provenance, source_filename)
-    if active_is_demo:
-        demo_steps("Dispatch")
+    if active_is_demo or active_is_real_demo:
+        demo_steps("Dispatch", step_hints)
     new_count = sum(notification["status"] == "New" for notification in dispatch_notifications)
     acknowledged_count = sum(
         notification["status"] == "Acknowledged" for notification in dispatch_notifications
@@ -1800,7 +1988,7 @@ elif navigation == "Dispatch":
                     st.toast("Notification acknowledged")
                     st.rerun()
             st.markdown('<div class="nm-row-separator"></div>', unsafe_allow_html=True)
-    if active_is_demo:
+    if active_is_demo or active_is_real_demo:
         demo_controls(video_hash, "dispatch")
 
 
@@ -1812,13 +2000,16 @@ elif navigation == "Street Lab":
         "assumptions, and take a practical observation plan to a neighborhood or school meeting.",
     )
     source_banner(provenance, source_filename)
-    if active_is_demo:
-        demo_steps("Street Lab")
+    if active_is_demo or active_is_real_demo:
+        demo_steps("Street Lab", step_hints)
     st.markdown(
         f'<p class="nm-section-copy">{escape(streetlab.DATA_BOUNDARY)} '
         + (
             "Here that is the scripted synthetic demo, which describes no real place."
             if active_is_demo
+            else "Here that is one short bundled stock clip of real traffic; a single clip is not "
+            "a representative sample, and NearMiss does not identify the location."
+            if active_is_real_demo
             else "Here that is one uploaded clip; a single clip is not a representative sample of an intersection."
         )
         + "</p>",
@@ -1980,7 +2171,7 @@ elif navigation == "Street Lab":
         "text/markdown",
         width="stretch",
     )
-    if active_is_demo:
+    if active_is_demo or active_is_real_demo:
         demo_controls(video_hash, "streetlab")
 
 
@@ -2005,6 +2196,12 @@ st.markdown(
     '<div class="nm-footer">NearMiss · Experimental decision support · '
     'Not a validated crash detector or emergency-service system'
     + (" · SYNTHETIC DEMO data in use" if active_is_demo else "")
+    + (
+        " · Real traffic sample: bundled stock footage, "
+        + ("precomputed tracking" if provenance.get("tracks_precomputed") else "fresh local tracking")
+        if active_is_real_demo
+        else ""
+    )
     + "</div>",
     unsafe_allow_html=True,
 )

@@ -143,3 +143,14 @@ Done and checked in this pass (Claude Opus `claude-opus-5-5`):
    syntax-checked only.
 
 The source pass did not render or browse. Host acceptance then inspected corrected deck slides, notes, reduced motion, pointer timer behavior, PDF pages, and representative video frames; rendered the final video in the isolated build folder; checked both exports; and opened the final MP4. Extra QA stills remain in the host scratch folder rather than the delivery package.
+
+## App entry after the real-traffic update
+
+The app’s primary **Start guided demo** now opens real traffic with actual
+precomputed tracking. The 165-second film and this eight-slide deck continue
+to demonstrate the explicitly labeled controlled synthetic scenario. To
+reproduce those captures or present the known incident-review sequence, choose
+**Controlled synthetic example** on Overview, or **Present the controlled
+synthetic walkthrough** below the schematic. The separate 15-second
+`presentation/exports/NearMiss-real-traffic-demo.mp4` shows the new real-footage
+overlays; its source and model-output boundaries are in `static/real-demo/`.

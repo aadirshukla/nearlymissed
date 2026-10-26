@@ -32,6 +32,7 @@ SYNTHETIC_BANNER = (
 SOURCE_KIND_LABELS = {
     "synthetic_demo": "Synthetic demonstration (generated footage, scripted tracks)",
     "uploaded_video": "Operator-supplied video",
+    "real_traffic_demo": "Real traffic sample (bundled licensed stock footage)",
 }
 
 # Review prompts for the quality checklist. These are disclosure thresholds,
@@ -202,8 +203,14 @@ def describe_source(
     video_id: Any = None,
     tracks: Any = None,
     records: Any = None,
+    provenance: dict | None = None,
 ) -> dict:
-    """Describe provenance. Any synthetic marker wins over a non-synthetic label."""
+    """Describe provenance. Any synthetic marker wins over a non-synthetic label.
+
+    ``provenance`` is the app's runtime provenance for this run. For the real
+    sample it states where the rows in use came from; without it the brief
+    makes no claim about the tracking origin.
+    """
 
     kind = _text(source_kind) or "unspecified"
     markers = [kind, _text(video_id)]
@@ -220,6 +227,18 @@ def describe_source(
             else "The source was labeled as non-synthetic, but its ID or track rows "
             "carry a synthetic marker, so it is treated as synthetic."
         )
+    elif kind == "real_traffic_demo":
+        label = SOURCE_KIND_LABELS[kind]
+        runtime = provenance if isinstance(provenance, dict) else {}
+        if runtime.get("data_source") == kind and runtime.get("pipeline_boundary"):
+            statement = f"{_text(runtime.get('summary'))} {_text(runtime['pipeline_boundary'])}".strip()
+        else:
+            statement = (
+                "Real stock traffic footage bundled with NearMiss; it is not operator footage. "
+                "The tracking origin was not supplied with this brief. Heuristics are provisional "
+                "and detector accuracy on this footage has not been measured."
+            )
+        note = None
     elif kind in SOURCE_KIND_LABELS:
         label = SOURCE_KIND_LABELS[kind]
         statement = (
@@ -901,11 +920,14 @@ def build_evidence_brief(
     reviews: Any = None,
     notifications: Any = None,
     generated_at: str | None = None,
+    provenance: dict | None = None,
 ) -> str:
     """Markdown incident/prediction brief built only from supplied evidence."""
 
     kind = INCIDENT if kind == INCIDENT else PREDICTION
-    source = describe_source(source_kind, video_id, tracks, [record] if isinstance(record, dict) else None)
+    source = describe_source(
+        source_kind, video_id, tracks, [record] if isinstance(record, dict) else None, provenance
+    )
     explanation = explain_evidence(kind, record, reviews, notifications)
     checks = processing_quality(kind=kind, record=record, metadata=metadata, tracks=tracks, source=source)
     generated_at = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")

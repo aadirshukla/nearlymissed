@@ -152,7 +152,8 @@ def test_presenter_walkthrough_is_read_only_and_keyboard_driven(isolated):
 
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="presenter_open_sidebar").click().run()
+    # The synthetic walkthrough's own, separately labeled Presenter entry.
+    at.button(key="presenter_open_story").click().run()
     assert not at.exception, at.exception
     assert at.session_state[presenter.ACTIVE] is True
     assert demo.is_demo_video_id(at.session_state["active_video"]["video_hash"])
@@ -200,7 +201,7 @@ def test_presenter_walkthrough_is_read_only_and_keyboard_driven(isolated):
 def test_presenter_shows_saved_review_without_changing_it(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     at.radio(key="navigation").set_value("Incidents").run()
     next(b for b in at.button if str(b.key or "").startswith("confirm_")).click().run()
     before_reviews = list_reviews(demo.DEMO_VIDEO_ID)
@@ -241,7 +242,7 @@ def test_presenter_step_opens_the_matching_workspace_page(isolated):
 def test_library_threshold_box_is_collapsed_until_opened(isolated):
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
-    at.button(key="start_demo").click().run()
+    at.button(key="start_synthetic_demo").click().run()
     at.radio(key="navigation").set_value("Library").run()
     assert not at.exception, at.exception
     assert any(e.label == "Explore one threshold" for e in at.expander)
